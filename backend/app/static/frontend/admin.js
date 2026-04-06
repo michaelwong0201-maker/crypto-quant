@@ -1,5 +1,6 @@
 const API = "/api";
 const LS = "cq_token";
+const LS_REMEMBER_USER = "cq_remember_username";
 
 let token = localStorage.getItem(LS);
 let me = null;
@@ -63,44 +64,21 @@ async function apiFetch(path, opts = {}) {
   return data;
 }
 
-/* ---------- Auth grid (dot pattern + glow) ---------- */
-function initAuthGrid(container) {
-  const canvas = container.querySelector(".auth-page__grid");
-  if (!canvas || canvas.tagName !== "CANVAS") return;
-  const ctx = canvas.getContext("2d");
-  const GAP = 18, DOT = 0.6;
-  let mx = -1, my = -1, raf;
-  function resize() {
-    const dpr = devicePixelRatio || 1;
-    canvas.width = container.clientWidth * dpr; canvas.height = container.clientHeight * dpr;
-    canvas.style.width = container.clientWidth + "px"; canvas.style.height = container.clientHeight + "px";
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+let _toastTimer = null;
+function showToast(msg) {
+  let t = document.getElementById("global-toast");
+  if (!t) {
+    t = document.createElement("div");
+    t.id = "global-toast";
+    t.className = "global-toast";
+    document.body.appendChild(t);
   }
-  function draw() {
-    const w = container.clientWidth, h = container.clientHeight;
-    ctx.clearRect(0, 0, w, h);
-    const cols = Math.ceil(w / GAP) + 1, rows = Math.ceil(h / GAP) + 1;
-    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-      const x = c * GAP, y = r * GAP;
-      let a = 0.1;
-      if (mx >= 0 && my >= 0) { const d = Math.hypot(x - mx, y - my); a += Math.max(0, 1 - d / 140) * 0.5; }
-      ctx.fillStyle = `rgba(255,255,255,${a})`; ctx.beginPath(); ctx.arc(x, y, DOT, 0, Math.PI * 2); ctx.fill();
-    }
-    raf = requestAnimationFrame(draw);
-  }
-  const onMove = e => { const rc = canvas.getBoundingClientRect(); mx = e.clientX - rc.left; my = e.clientY - rc.top; };
-  const onLeave = () => { mx = -1; my = -1; };
-  resize(); draw();
-  addEventListener("resize", resize); container.addEventListener("mousemove", onMove); container.addEventListener("mouseleave", onLeave);
-  canvas._cleanup = () => { cancelAnimationFrame(raf); removeEventListener("resize", resize); container.removeEventListener("mousemove", onMove); container.removeEventListener("mouseleave", onLeave); };
+  if (_toastTimer) clearTimeout(_toastTimer);
+  t.textContent = msg;
+  t.classList.add("global-toast--show");
+  _toastTimer = setTimeout(() => { t.classList.remove("global-toast--show"); _toastTimer = null; }, 3000);
 }
-
-let _authTimer = null;
-function showAuthError(el, msg) {
-  if (_authTimer) clearTimeout(_authTimer);
-  el.textContent = msg; el.hidden = false;
-  _authTimer = setTimeout(() => { el.hidden = true; el.textContent = ""; _authTimer = null; }, 3000);
-}
+function showAuthError(_el, msg) { showToast(msg); }
 
 /* ---------- Routing ---------- */
 function parseHash() { route = (location.hash || "#/dashboard").replace(/^#\//, "").split("/")[0] || "dashboard"; }
@@ -126,57 +104,92 @@ const LABELS = { dashboard: "概览", assets: "资产收益", trading: "实盘�
 function navLink(h, l) { return `<a class="${route === h ? 'active' : ''}" href="#/${h}">${ICONS[h] || ''}<span>${l}</span></a>`; }
 
 /* ==================== LOGIN ==================== */
+const AUTH_BG_IMG_HTML = '<img class="auth-page__bg-img" src="./login-bg.png" srcset="./login-bg.png 1024w, ./login-bg@2x.png 2048w, ./login-bg@4k.png 3840w" sizes="100vw" alt="" decoding="async" fetchpriority="high" />';
+
+function initLoginVideoBg(container) {
+  const video = document.createElement("video");
+  video.className = "auth-page__bg-video";
+  video.src = "./login-bg.mp4";
+  video.muted = true;
+  video.loop = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  video.setAttribute("playsinline", "");
+  video.oncanplaythrough = () => {
+    video.play().then(() => {
+      video.classList.add("auth-page__bg-video--ready");
+    }).catch(() => {});
+  };
+  container.appendChild(video);
+}
+
 async function renderLogin(root) {
   root.innerHTML = "";
-  const w = el(`<div class="auth-page"><canvas class="auth-page__grid"></canvas><div class="auth-page__glow"></div>
-    <div class="auth-page__shell"><div class="auth-card"><div class="auth-card__accent"></div><div class="auth-card__inner">
-      <div class="auth-brand"><img src="./btc-logo.svg" width="48" height="48" alt=""/><h1 class="auth-title">Crypto Quant</h1><p class="auth-subtitle">量化交易系统</p></div>
-      <form id="lf" class="auth-form">
-        <div class="auth-field"><label class="auth-label">账号</label><input class="auth-input" name="username" type="text" autocomplete="username" placeholder="请输入账号"/></div>
-        <div class="auth-field"><label class="auth-label">密码</label><input class="auth-input" name="password" type="password" autocomplete="current-password" placeholder="请输入密码"/></div>
-        <button class="auth-submit" id="lb" type="submit">登录</button>
-        <div class="auth-error" id="le" hidden></div>
-      </form></div></div></div></div>`);
-  root.appendChild(w); initAuthGrid(w);
-  const form = w.querySelector("#lf"), le = w.querySelector("#le"), btn = w.querySelector("#lb");
+  const w = el(`<div class="auth-page">
+    ${AUTH_BG_IMG_HTML}
+    <div class="auth-page__brand"><img src="./planet-logo-white.png" width="36" height="36" alt=""/><span>黑洞量化</span></div>
+    <div class="auth-login-box">
+      <form id="lf">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <input class="auth-input" id="auth-user" name="username" type="text" autocomplete="username" placeholder="请输入账户"/>
+          <input class="auth-input" id="auth-pass" name="password" type="password" autocomplete="current-password" placeholder="请输入密码"/>
+          <button class="auth-submit" id="lb" type="submit">登录</button>
+        </div>
+      </form>
+    </div>
+  </div>`);
+  root.appendChild(w);
+  initLoginVideoBg(w);
+  const form = w.querySelector("#lf"), btn = w.querySelector("#lb");
+  const uIn = w.querySelector("#auth-user");
+  const saved = localStorage.getItem(LS_REMEMBER_USER);
+  if (saved) { uIn.value = saved; }
   form.onsubmit = async e => {
     e.preventDefault();
     const fd = new FormData(form), u = (fd.get("username")||"").trim(), p = fd.get("password")||"";
-    if (!u) { showAuthError(le, "请输入账号"); return; } if (!p) { showAuthError(le, "请输入密码"); return; }
+    if (!u) { showToast("请输入账户"); return; } if (!p) { showToast("请输入密码"); return; }
     btn.disabled = true; btn.textContent = "登录中…";
     try {
       const d = await apiFetch("/auth/login", { method: "POST", body: JSON.stringify({ username: u, password: p }) });
+      localStorage.setItem(LS_REMEMBER_USER, u);
       setToken(d.access_token); await loadMe();
       location.hash = d.must_change_password ? "#/change-password" : "#/dashboard"; render();
-    } catch (err) { showAuthError(le, err.message); } finally { btn.disabled = false; btn.textContent = "登录"; }
+    } catch (err) { showToast(err.message); } finally { btn.disabled = false; btn.textContent = "登录"; }
   };
 }
 
 async function renderChangePassword(root) {
   root.innerHTML = "";
-  const w = el(`<div class="auth-page"><canvas class="auth-page__grid"></canvas><div class="auth-page__glow"></div>
-    <div class="auth-page__shell"><div class="auth-card"><div class="auth-card__accent"></div><div class="auth-card__inner">
-      <div class="auth-brand"><img src="./btc-logo.svg" width="48" height="48" alt=""/><h1 class="auth-title">设置新密码</h1><p class="auth-subtitle">首次登录须修改密码</p></div>
-      <form id="cf" class="auth-form">
-        <div class="auth-field"><label class="auth-label">当前密码</label><input class="auth-input" name="cur" type="password" autocomplete="current-password" placeholder="请输入当前密码"/></div>
-        <div class="auth-field"><label class="auth-label">新密码（≥6 位）</label><input class="auth-input" name="n1" type="password" autocomplete="new-password" placeholder="至少 6 位"/></div>
-        <div class="auth-field"><label class="auth-label">确认新密码</label><input class="auth-input" name="n2" type="password" autocomplete="new-password" placeholder="再次输入新密码"/></div>
-        <button class="auth-submit" id="cb" type="submit">确认修改</button>
-        <div class="auth-error" id="ce" hidden></div>
-      </form></div></div></div></div>`);
-  root.appendChild(w); initAuthGrid(w);
-  const form = w.querySelector("#cf"), ce = w.querySelector("#ce"), btn = w.querySelector("#cb");
+  const w = el(`<div class="auth-page auth-page--center">
+    ${AUTH_BG_IMG_HTML}
+    <div class="auth-page__brand"><img src="./planet-logo-white.png" width="36" height="36" alt=""/><span>黑洞量化</span></div>
+    <div class="auth-center-box">
+      <h2 class="auth-center-box__title">设置新密码</h2>
+      <p class="auth-center-box__sub">首次登录须修改密码</p>
+      <form id="cf">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <input class="auth-input" name="cur" type="password" autocomplete="current-password" placeholder="请输入当前密码"/>
+          <input class="auth-input" name="n1" type="password" autocomplete="new-password" placeholder="新密码（至少 6 位）"/>
+          <input class="auth-input" name="n2" type="password" autocomplete="new-password" placeholder="再次输入新密码"/>
+          <button class="auth-submit" id="cb" type="submit">确认修改</button>
+        </div>
+      </form>
+    </div>
+  </div>`);
+  root.appendChild(w);
+  initLoginVideoBg(w);
+  const form = w.querySelector("#cf"), btn = w.querySelector("#cb");
   form.onsubmit = async e => {
     e.preventDefault(); const fd = new FormData(form);
     const c = fd.get("cur")||"", n1 = fd.get("n1")||"", n2 = fd.get("n2")||"";
-    if (!c) { showAuthError(ce, "请输入当前密码"); return; }
-    if (!n1 || n1.length < 6) { showAuthError(ce, "新密码至少需要 6 位"); return; }
-    if (n1 !== n2) { showAuthError(ce, "两次输入的新密码不一致"); return; }
+    if (!c) { showToast("请输入当前密码"); return; }
+    if (!n1 || n1.length < 6) { showToast("新密码至少需要 6 位"); return; }
+    if (n1 !== n2) { showToast("两次输入的新密码不一致"); return; }
     btn.disabled = true; btn.textContent = "保存中…";
     try {
       await apiFetch("/auth/change-password", { method: "POST", body: JSON.stringify({ current_password: c, new_password: n1 }) });
       await loadMe(); location.hash = "#/dashboard"; render();
-    } catch (err) { showAuthError(ce, err.message); } finally { btn.disabled = false; btn.textContent = "确认修改"; }
+    } catch (err) { showToast(err.message); } finally { btn.disabled = false; btn.textContent = "确认修改"; }
   };
 }
 
