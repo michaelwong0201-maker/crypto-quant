@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,6 +10,7 @@ from app.core.deps import get_current_user
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.session import get_db
 from app.models.audit_log import AuditLog
+from app.models.role import ALL_PERMISSION_KEYS, Role
 from app.models.user import User
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, TokenResponse
 from app.schemas.user import UserOut
@@ -26,9 +28,35 @@ async def login(body: LoginRequest, db: Annotated[AsyncSession, Depends(get_db)]
     return TokenResponse(access_token=token, must_change_password=user.must_change_password)
 
 
-@router.get("/me", response_model=UserOut)
-async def me(user: Annotated[User, Depends(get_current_user)]) -> User:
-    return user
+@router.get("/me")
+async def me(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict:
+    permissions: list[str] = []
+    role_name = None
+    if user.role == "admin":
+        permissions = list(ALL_PERMISSION_KEYS)
+    if user.role_id:
+        rr = await db.execute(select(Role).where(Role.id == user.role_id))
+        role_obj = rr.scalar_one_or_none()
+        if role_obj:
+            role_name = role_obj.name
+            if not role_obj.is_system:
+                permissions = list(role_obj.permissions or [])
+            else:
+                permissions = list(ALL_PERMISSION_KEYS)
+    return {
+        "id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "role_id": user.role_id,
+        "role_name": role_name,
+        "is_active": user.is_active,
+        "must_change_password": user.must_change_password,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "permissions": permissions,
+    }
 
 
 @router.post("/change-password")

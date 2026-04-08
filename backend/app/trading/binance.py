@@ -15,6 +15,19 @@ def _norm_symbol(symbol: str) -> str:
     return symbol.replace("/", "").upper()
 
 
+_shared_client: httpx.AsyncClient | None = None
+
+
+def _get_shared_client() -> httpx.AsyncClient:
+    global _shared_client
+    if _shared_client is None or _shared_client.is_closed:
+        _shared_client = httpx.AsyncClient(
+            timeout=10.0,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+    return _shared_client
+
+
 class BinanceTestnetConnector(ExchangeConnector):
     """Signed REST for Binance spot & USDT-M futures testnets."""
 
@@ -46,12 +59,12 @@ class BinanceTestnetConnector(ExchangeConnector):
                 raise ValueError("BINANCE_API_KEY and BINANCE_API_SECRET must be set for signed calls")
             query = urlencode(sorted((str(k), str(v)) for k, v in p.items()))
             p["signature"] = self._sign(query)
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            url = f"{base}{path}"
-            r = await client.request(method, url, params=p, headers=self._headers() if signed else None)
-            r.raise_for_status()
-            data = r.json()
-            return data if isinstance(data, dict) else {"raw": data}
+        client = _get_shared_client()
+        url = f"{base}{path}"
+        r = await client.request(method, url, params=p, headers=self._headers() if signed else None)
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else {"raw": data}
 
     async def place_market_order(self, intent: OrderIntent) -> dict[str, Any]:
         sym = _norm_symbol(intent.symbol)
@@ -90,24 +103,24 @@ class BinanceTestnetConnector(ExchangeConnector):
         base = self._fut_base if futures else self._spot_base
         path = "/fapi/v1/klines" if futures else "/api/v3/klines"
         params = {"symbol": _norm_symbol(symbol), "interval": interval, "limit": limit}
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.get(f"{base}{path}", params=params)
-            r.raise_for_status()
-            return r.json()
+        client = _get_shared_client()
+        r = await client.get(f"{base}{path}", params=params)
+        r.raise_for_status()
+        return r.json()
 
     async def futures_mark_price(self, symbol: str) -> dict[str, Any]:
         sym = _norm_symbol(symbol)
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.get(
-                f"{self._fut_base}/fapi/v1/premiumIndex", params={"symbol": sym}
-            )
-            r.raise_for_status()
-            data = r.json()
-            return data if isinstance(data, dict) else {}
+        client = _get_shared_client()
+        r = await client.get(
+            f"{self._fut_base}/fapi/v1/premiumIndex", params={"symbol": sym}
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else {}
 
     async def spot_ticker_price(self, symbol: str) -> dict[str, Any]:
         sym = _norm_symbol(symbol)
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.get(f"{self._spot_base}/api/v3/ticker/price", params={"symbol": sym})
-            r.raise_for_status()
-            return r.json()
+        client = _get_shared_client()
+        r = await client.get(f"{self._spot_base}/api/v3/ticker/price", params={"symbol": sym})
+        r.raise_for_status()
+        return r.json()

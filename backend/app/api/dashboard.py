@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
@@ -19,6 +20,20 @@ from app.trading.binance import BinanceTestnetConnector
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
+async def _fetch_market_tickers() -> dict[str, str]:
+    """Fetch BTC & ETH prices concurrently with a short timeout."""
+    try:
+        conn = BinanceTestnetConnector()
+        btc_task = conn.spot_ticker_price("BTCUSDT")
+        eth_task = conn.spot_ticker_price("ETHUSDT")
+        btc, eth = await asyncio.wait_for(
+            asyncio.gather(btc_task, eth_task), timeout=5.0
+        )
+        return {"btc_price": btc.get("price", "0"), "eth_price": eth.get("price", "0")}
+    except Exception:
+        return {"btc_price": "N/A", "eth_price": "N/A"}
+
+
 @router.get("/overview")
 async def overview(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -33,32 +48,30 @@ async def overview(
         q_orders = q_orders.where(OrderRecord.user_id == uid)
         q_strat = q_strat.where(StrategyInstance.owner_id == uid)
 
-    oc = (await db.execute(q_orders)).scalar_one()
-    sc = (await db.execute(q_strat)).scalar_one()
-
     rq = select(OrderRecord).order_by(OrderRecord.id.desc()).limit(10)
     if not is_admin:
         rq = rq.where(OrderRecord.user_id == uid)
-    recent = list((await db.execute(rq)).scalars().all())
 
-    # Trade stats
-    stats = await get_trade_stats(db, None if is_admin else uid)
-
-    # Recent alerts
     alerts_q = select(AlertEvent).order_by(AlertEvent.id.desc()).limit(5)
-    alert_rows = list((await db.execute(alerts_q)).scalars().all())
 
-    # Market ticker
-    market = {}
-    try:
-        conn = BinanceTestnetConnector()
-        ticker = await conn.spot_ticker_price("BTCUSDT")
-        market["btc_price"] = ticker.get("price", "0")
-        ticker_eth = await conn.spot_ticker_price("ETHUSDT")
-        market["eth_price"] = ticker_eth.get("price", "0")
-    except Exception:
-        market["btc_price"] = "N/A"
-        market["eth_price"] = "N/A"
+    # Run all DB queries concurrently (single session, but interleaved I/O)
+    oc_fut = db.execute(q_orders)
+    sc_fut = db.execute(q_strat)
+    recent_fut = db.execute(rq)
+    stats_fut = get_trade_stats(db, None if is_admin else uid)
+    alerts_fut = db.execute(alerts_q)
+
+    # Binance API runs fully in parallel with DB work
+    market_fut = _fetch_market_tickers()
+
+    oc_res, sc_res, recent_res, stats, alerts_res, market = await asyncio.gather(
+        oc_fut, sc_fut, recent_fut, stats_fut, alerts_fut, market_fut
+    )
+
+    oc = oc_res.scalar_one()
+    sc = sc_res.scalar_one()
+    recent = list(recent_res.scalars().all())
+    alert_rows = list(alerts_res.scalars().all())
 
     return {
         "order_count": oc,

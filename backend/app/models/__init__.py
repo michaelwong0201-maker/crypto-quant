@@ -9,4 +9,5 @@ from app.models.portfolio_snapshot import PortfolioSnapshot  # noqa: F401
 from app.models.risk_settings import RiskSettings  # noqa: F401
 from app.models.strategy_instance import StrategyInstance  # noqa: F401
 from app.models.strategy_log import StrategyLog  # noqa: F401
+from app.models.role import Role  # noqa: F401
 from app.models.user import User  # noqa: F401

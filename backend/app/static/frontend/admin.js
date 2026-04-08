@@ -17,7 +17,13 @@ function fmtNum(n, d = 2) { return Number(n).toLocaleString("en-US", { minimumFr
 function fmtTime(iso) {
   if (!iso) return "-";
   const d = new Date(iso);
-  return d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const Y = d.getFullYear();
+  const M = String(d.getMonth() + 1).padStart(2, "0");
+  const D = String(d.getDate()).padStart(2, "0");
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  const s = String(d.getSeconds()).padStart(2, "0");
+  return `${Y}-${M}-${D} ${h}:${m}:${s}`;
 }
 function fmtTs(ts) { return fmtTime(new Date(ts * 1000).toISOString()); }
 function sideBadge(s) { return s === "BUY" ? '<span class="badge badge--green">BUY</span>' : '<span class="badge badge--red">SELL</span>'; }
@@ -64,21 +70,119 @@ async function apiFetch(path, opts = {}) {
   return data;
 }
 
-let _toastTimer = null;
-function showToast(msg) {
-  let t = document.getElementById("global-toast");
-  if (!t) {
-    t = document.createElement("div");
-    t.id = "global-toast";
-    t.className = "global-toast";
-    document.body.appendChild(t);
+const PAGE_SIZE = 10;
+function buildPagerHTML(total, page) {
+  const pages = Math.ceil(total / PAGE_SIZE) || 1;
+  if (total <= PAGE_SIZE) return '';
+  let btns = `<button class="pager__btn" data-page="${page - 1}" ${page <= 1 ? 'disabled' : ''}>&lsaquo;</button>`;
+  for (let i = 1; i <= pages; i++) {
+    if (pages > 7 && i > 3 && i < pages - 2 && Math.abs(i - page) > 1) {
+      if (i === 4 || i === pages - 3) btns += '<span style="color:var(--muted);padding:0 2px">…</span>';
+      continue;
+    }
+    btns += `<button class="pager__btn${i === page ? ' pager__btn--active' : ''}" data-page="${i}">${i}</button>`;
   }
-  if (_toastTimer) clearTimeout(_toastTimer);
-  t.textContent = msg;
-  t.classList.add("global-toast--show");
-  _toastTimer = setTimeout(() => { t.classList.remove("global-toast--show"); _toastTimer = null; }, 3000);
+  btns += `<button class="pager__btn" data-page="${page + 1}" ${page >= pages ? 'disabled' : ''}>&rsaquo;</button>`;
+  return `<div class="pager"><span class="pager__info">共 ${total} 条</span><div class="pager__btns">${btns}</div></div>`;
 }
-function showAuthError(_el, msg) { showToast(msg); }
+function pageSlice(list, page) {
+  const start = (page - 1) * PAGE_SIZE;
+  return list.slice(start, start + PAGE_SIZE);
+}
+
+const MAX_TOASTS = 3;
+function _getToastContainer() {
+  let c = document.getElementById("toast-container");
+  if (!c) { c = document.createElement("div"); c.id = "toast-container"; c.className = "toast-container"; document.body.appendChild(c); }
+  return c;
+}
+const TOAST_ICONS = {
+  success: '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>',
+  warn: '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>',
+  error: '<svg viewBox="0 0 20 20" fill="currentColor" width="18" height="18"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>',
+};
+function showToast(msg, type) {
+  if (!type) type = "warn";
+  const c = _getToastContainer();
+  const item = document.createElement("div");
+  item.className = "toast-item toast-" + type;
+  item.innerHTML = '<span class="toast-icon">' + (TOAST_ICONS[type] || '') + '</span><span class="toast-msg">' + msg + '</span>';
+  c.appendChild(item);
+  requestAnimationFrame(() => requestAnimationFrame(() => item.classList.add("toast-item--show")));
+  const dismiss = () => {
+    item.classList.remove("toast-item--show");
+    setTimeout(() => { if (item.parentNode) item.parentNode.removeChild(item); }, 260);
+  };
+  setTimeout(dismiss, 3000);
+  while (c.children.length > MAX_TOASTS) {
+    const oldest = c.children[0];
+    oldest.classList.remove("toast-item--show");
+    setTimeout(() => { if (oldest.parentNode) oldest.parentNode.removeChild(oldest); }, 260);
+  }
+}
+function showAuthError(_el, msg) { showToast(msg, "error"); }
+
+/* ---------- Global modals ---------- */
+function _closeAllModals() {
+  document.querySelectorAll(".modal-overlay").forEach(m => m.remove());
+}
+
+function showConfirmModal(msg, onConfirm) {
+  _closeAllModals();
+  const overlay = el(`<div class="modal-overlay">
+    <div class="modal-box">
+      <p class="modal-msg">${msg}</p>
+      <div class="modal-actions">
+        <span class="modal-cancel" id="mc">取消</span>
+        <button class="modal-confirm" id="mk">确认</button>
+      </div>
+    </div>
+  </div>`);
+  document.body.appendChild(overlay);
+  overlay.querySelector("#mc").onclick = () => overlay.remove();
+  overlay.querySelector("#mk").onclick = () => { overlay.remove(); onConfirm(); };
+  overlay.addEventListener("mousedown", e => { if (e.target === overlay) overlay.remove(); });
+}
+
+function showChangePasswordModal() {
+  _closeAllModals();
+  const overlay = el(`<div class="modal-overlay">
+    <div class="modal-box">
+      <h3>修改密码</h3>
+      <div>
+        <div class="modal-field"><label>旧密码</label><input type="text" data-f="cur" class="mask-pwd" autocomplete="off" spellcheck="false" placeholder="请输入旧密码"/></div>
+        <div class="modal-field"><label>新密码</label><input type="text" data-f="n1" class="mask-pwd" autocomplete="off" spellcheck="false" placeholder="请输入新密码"/></div>
+        <div class="modal-field"><label>确认新密码</label><input type="text" data-f="n2" class="mask-pwd" autocomplete="off" spellcheck="false" placeholder="再次输入新密码"/></div>
+        <div class="modal-actions">
+          <span class="modal-cancel" id="mc">取消</span>
+          <button class="modal-confirm" type="button" id="cpf-save">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>`);
+  document.body.appendChild(overlay);
+  overlay.querySelector("#mc").onclick = () => overlay.remove();
+  overlay.addEventListener("mousedown", e => { if (e.target === overlay) overlay.remove(); });
+  const _v = f => (overlay.querySelector(`[data-f="${f}"]`)?.value || "").trim();
+  overlay.querySelector("#cpf-save").onclick = async () => {
+    const cur = _v("cur"), n1 = _v("n1"), n2 = _v("n2");
+    if (!cur) { showToast("请输入旧密码"); return; }
+    if (!n1) { showToast("请输入新密码"); return; }
+    if (n1.length < 6) { showToast("新密码至少需要 6 位"); return; }
+    if (n1 !== n2) { showToast("两次输入的新密码不一致"); return; }
+    if (n1 === cur) { showToast("新密码不能与旧密码相同"); return; }
+    const btn = overlay.querySelector("#cpf-save");
+    btn.disabled = true; btn.textContent = "保存中…";
+    try {
+      await apiFetch("/auth/change-password", { method: "POST", body: JSON.stringify({ current_password: cur, new_password: n1 }) });
+      overlay.remove();
+      showToast("密码修改成功", "success");
+      await loadMe();
+    } catch (err) { showToast(err.message, "error"); } finally { btn.disabled = false; btn.textContent = "保存"; }
+  };
+}
+
+function doLogout() { setToken(null); me = null; location.hash = "#/login"; render(); }
 
 /* ---------- Routing ---------- */
 function parseHash() { route = (location.hash || "#/dashboard").replace(/^#\//, "").split("/")[0] || "dashboard"; }
@@ -99,9 +203,134 @@ const ICONS = {
   risk: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
   system: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
   users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  roles: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  accounts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>',
 };
-const LABELS = { dashboard: "概览", assets: "资产收益", trading: "实盘交易", charts: "数据图表", strategies: "策略引擎", risk: "风控配置", system: "系统监控", users: "账号管理" };
-function navLink(h, l) { return `<a class="${route === h ? 'active' : ''}" href="#/${h}">${ICONS[h] || ''}<span>${l}</span></a>`; }
+const CHEVRON_DOWN = '<svg class="sider__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>';
+const MENU_TREE = [
+  { key: "dashboard", label: "概览" },
+  { key: "assets", label: "资产收益" },
+  { key: "trading", label: "实盘交易" },
+  { key: "charts", label: "数据图表" },
+  { key: "strategies", label: "策略引擎" },
+  { key: "risk", label: "风控配置" },
+  { key: "system", label: "系统监控" },
+  { key: "users", label: "账号管理", children: [
+    { key: "roles", label: "角色管理" },
+    { key: "accounts", label: "创建账号" },
+  ]},
+];
+const ALL_LABELS = {};
+MENU_TREE.forEach(m => { ALL_LABELS[m.key] = m.label; if (m.children) m.children.forEach(c => { ALL_LABELS[c.key] = c.label; }); });
+let _usersMenuOpen = false;
+
+function buildSiderHTML(perms) {
+  const p = perms || [];
+  const hasPerm = k => !me || me.role === "admin" || p.includes(k);
+  let html = "";
+  for (const item of MENU_TREE) {
+    if (item.children) {
+      const visChildren = item.children.filter(c => hasPerm(c.key));
+      if (visChildren.length === 0) continue;
+      const isChildActive = visChildren.some(c => route === c.key);
+      const open = _usersMenuOpen || isChildActive;
+      html += `<div class="sider__group${open ? ' sider__group--open' : ''}" data-group="${item.key}">`;
+      html += `<div class="sider__parent" data-label="${item.label}">${ICONS[item.key] || ''}<span>${item.label}</span>${CHEVRON_DOWN}</div>`;
+      html += `<div class="sider__children">`;
+      for (const ch of visChildren) {
+        html += `<a class="${route === ch.key ? 'active' : ''} sider__child" href="#/${ch.key}" data-label="${ch.label}">${ICONS[ch.key] || ''}<span>${ch.label}</span></a>`;
+      }
+      html += `</div></div>`;
+    } else {
+      if (!hasPerm(item.key)) continue;
+      html += `<a class="${route === item.key ? 'active' : ''}" href="#/${item.key}" data-label="${item.label}">${ICONS[item.key] || ''}<span>${item.label}</span></a>`;
+    }
+  }
+  return html;
+}
+
+let _siderPopup = null;
+let _siderPopupTimer = null;
+function _hideSiderPopup() {
+  _siderPopupTimer = setTimeout(() => { if (_siderPopup) _siderPopup.style.display = "none"; }, 120);
+}
+function _showSiderPopup(anchor, group) {
+  clearTimeout(_siderPopupTimer);
+  if (!_siderPopup) {
+    _siderPopup = document.createElement("div");
+    _siderPopup.className = "sider-popup";
+    _siderPopup.addEventListener("mouseenter", () => clearTimeout(_siderPopupTimer));
+    _siderPopup.addEventListener("mouseleave", _hideSiderPopup);
+    document.body.appendChild(_siderPopup);
+  }
+  const children = group.querySelectorAll(".sider__children a");
+  let html = "";
+  children.forEach(a => { html += `<a class="sider-popup__item${a.classList.contains('active') ? ' active' : ''}" href="${a.getAttribute('href')}">${a.querySelector("span")?.textContent || ''}</a>`; });
+  _siderPopup.innerHTML = html;
+  const r = anchor.getBoundingClientRect();
+  _siderPopup.style.left = r.right + 6 + "px";
+  _siderPopup.style.top = r.top + "px";
+  _siderPopup.style.display = "block";
+  _siderPopup.querySelectorAll("a").forEach(a => a.addEventListener("click", () => { _siderPopup.style.display = "none"; }));
+}
+
+function bindSiderGroups(root) {
+  root.querySelectorAll(".sider__parent").forEach(p => {
+    p.addEventListener("click", () => {
+      if (siderCollapsed) return;
+      const g = p.closest(".sider__group");
+      if (g) { g.classList.toggle("sider__group--open"); _usersMenuOpen = g.classList.contains("sider__group--open"); }
+    });
+    p.addEventListener("mouseenter", () => {
+      if (!siderCollapsed) return;
+      _hideSiderTip();
+      const g = p.closest(".sider__group");
+      if (g) _showSiderPopup(p, g);
+    });
+    p.addEventListener("mouseleave", () => {
+      if (siderCollapsed) _hideSiderPopup();
+    });
+  });
+}
+const TOGGLE_EXPAND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><polyline points="14 9 17 12 14 15"/></svg>';
+const TOGGLE_COLLAPSE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><polyline points="17 9 14 12 17 15"/></svg>';
+let siderCollapsed = localStorage.getItem("cq_sider_collapsed") === "1";
+
+let _siderTip = null;
+function _showSiderTip(anchor, text) {
+  if (!_siderTip) {
+    _siderTip = document.createElement("div");
+    _siderTip.className = "sider-tooltip";
+    document.body.appendChild(_siderTip);
+  }
+  const r = anchor.getBoundingClientRect();
+  _siderTip.textContent = text;
+  _siderTip.style.left = r.right + 8 + "px";
+  _siderTip.style.top = r.top + r.height / 2 + "px";
+  _siderTip.style.transform = "translateY(-50%)";
+  _siderTip.style.display = "";
+}
+function _hideSiderTip() { if (_siderTip) _siderTip.style.display = "none"; }
+
+function bindSiderToggle(root) {
+  const btn = root.querySelector("#sider-toggle");
+  const sider = root.querySelector(".sider");
+  if (!btn || !sider) return;
+  if (siderCollapsed) { sider.classList.add("sider--collapsed"); btn.innerHTML = TOGGLE_EXPAND; }
+  btn.onclick = () => {
+    siderCollapsed = !siderCollapsed;
+    sider.classList.toggle("sider--collapsed", siderCollapsed);
+    btn.innerHTML = siderCollapsed ? TOGGLE_EXPAND : TOGGLE_COLLAPSE;
+    localStorage.setItem("cq_sider_collapsed", siderCollapsed ? "1" : "0");
+    _hideSiderTip();
+    if (_siderPopup) _siderPopup.style.display = "none";
+  };
+  sider.querySelectorAll("a[data-label], .sider__parent[data-label]").forEach(a => {
+    a.addEventListener("mouseenter", () => { if (siderCollapsed) _showSiderTip(a, a.dataset.label); });
+    a.addEventListener("mouseleave", () => { _hideSiderTip(); });
+  });
+  bindSiderGroups(root);
+}
 
 /* ==================== LOGIN ==================== */
 const AUTH_BG_IMG_HTML = '<img class="auth-page__bg-img" src="./login-bg.png" srcset="./login-bg.png 1024w, ./login-bg@2x.png 2048w, ./login-bg@4k.png 3840w" sizes="100vw" alt="" decoding="async" fetchpriority="high" />';
@@ -129,33 +358,34 @@ async function renderLogin(root) {
     ${AUTH_BG_IMG_HTML}
     <div class="auth-page__brand"><img src="./planet-logo-white.png" width="36" height="36" alt=""/><span>黑洞量化</span></div>
     <div class="auth-login-box">
-      <form id="lf">
+      <div>
         <div style="display:flex;flex-direction:column;gap:16px">
-          <input class="auth-input" id="auth-user" name="username" type="text" autocomplete="username" placeholder="请输入账户"/>
-          <input class="auth-input" id="auth-pass" name="password" type="password" autocomplete="current-password" placeholder="请输入密码"/>
-          <button class="auth-submit" id="lb" type="submit">登录</button>
+          <input class="auth-input" id="auth-user" type="text" autocomplete="off" spellcheck="false" placeholder="请输入账号"/>
+          <input class="auth-input mask-pwd" id="auth-pass" type="text" autocomplete="off" spellcheck="false" placeholder="请输入密码"/>
+          <button class="auth-submit" id="lb" type="button">登录</button>
         </div>
-      </form>
+      </div>
     </div>
   </div>`);
   root.appendChild(w);
   initLoginVideoBg(w);
-  const form = w.querySelector("#lf"), btn = w.querySelector("#lb");
-  const uIn = w.querySelector("#auth-user");
+  const btn = w.querySelector("#lb");
+  const uIn = w.querySelector("#auth-user"), pIn = w.querySelector("#auth-pass");
   const saved = localStorage.getItem(LS_REMEMBER_USER);
   if (saved) { uIn.value = saved; }
-  form.onsubmit = async e => {
-    e.preventDefault();
-    const fd = new FormData(form), u = (fd.get("username")||"").trim(), p = fd.get("password")||"";
-    if (!u) { showToast("请输入账户"); return; } if (!p) { showToast("请输入密码"); return; }
+  const doLogin = async () => {
+    const u = uIn.value.trim(), p = pIn.value;
+    if (!u) { showToast("请输入账号"); return; } if (!p) { showToast("请输入密码"); return; }
     btn.disabled = true; btn.textContent = "登录中…";
     try {
       const d = await apiFetch("/auth/login", { method: "POST", body: JSON.stringify({ username: u, password: p }) });
       localStorage.setItem(LS_REMEMBER_USER, u);
-      setToken(d.access_token); await loadMe();
-      location.hash = d.must_change_password ? "#/change-password" : "#/dashboard"; render();
-    } catch (err) { showToast(err.message); } finally { btn.disabled = false; btn.textContent = "登录"; }
+      setToken(d.access_token);
+      location.hash = "#/dashboard"; render();
+    } catch (err) { showToast(err.message, "error"); } finally { btn.disabled = false; btn.textContent = "登录"; }
   };
+  btn.onclick = doLogin;
+  pIn.addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
 }
 
 async function renderChangePassword(root) {
@@ -166,22 +396,22 @@ async function renderChangePassword(root) {
     <div class="auth-center-box">
       <h2 class="auth-center-box__title">设置新密码</h2>
       <p class="auth-center-box__sub">首次登录须修改密码</p>
-      <form id="cf">
+      <div>
         <div style="display:flex;flex-direction:column;gap:16px">
-          <input class="auth-input" name="cur" type="password" autocomplete="current-password" placeholder="请输入当前密码"/>
-          <input class="auth-input" name="n1" type="password" autocomplete="new-password" placeholder="新密码（至少 6 位）"/>
-          <input class="auth-input" name="n2" type="password" autocomplete="new-password" placeholder="再次输入新密码"/>
-          <button class="auth-submit" id="cb" type="submit">确认修改</button>
+          <input class="auth-input mask-pwd" data-f="cur" type="text" autocomplete="off" spellcheck="false" placeholder="请输入当前密码"/>
+          <input class="auth-input mask-pwd" data-f="n1" type="text" autocomplete="off" spellcheck="false" placeholder="新密码（至少 6 位）"/>
+          <input class="auth-input mask-pwd" data-f="n2" type="text" autocomplete="off" spellcheck="false" placeholder="再次输入新密码"/>
+          <button class="auth-submit" id="cb" type="button">确认修改</button>
         </div>
-      </form>
+      </div>
     </div>
   </div>`);
   root.appendChild(w);
   initLoginVideoBg(w);
-  const form = w.querySelector("#cf"), btn = w.querySelector("#cb");
-  form.onsubmit = async e => {
-    e.preventDefault(); const fd = new FormData(form);
-    const c = fd.get("cur")||"", n1 = fd.get("n1")||"", n2 = fd.get("n2")||"";
+  const btn = w.querySelector("#cb");
+  const _v = f => (w.querySelector(`[data-f="${f}"]`)?.value || "");
+  btn.onclick = async () => {
+    const c = _v("cur"), n1 = _v("n1"), n2 = _v("n2");
     if (!c) { showToast("请输入当前密码"); return; }
     if (!n1 || n1.length < 6) { showToast("新密码至少需要 6 位"); return; }
     if (n1 !== n2) { showToast("两次输入的新密码不一致"); return; }
@@ -189,24 +419,51 @@ async function renderChangePassword(root) {
     try {
       await apiFetch("/auth/change-password", { method: "POST", body: JSON.stringify({ current_password: c, new_password: n1 }) });
       await loadMe(); location.hash = "#/dashboard"; render();
-    } catch (err) { showToast(err.message); } finally { btn.disabled = false; btn.textContent = "确认修改"; }
+    } catch (err) { showToast(err.message, "error"); } finally { btn.disabled = false; btn.textContent = "确认修改"; }
   };
 }
 
 /* ==================== MAIN LAYOUT ==================== */
-async function renderMain(root) {
-  const crumb = LABELS[route] || route;
+const BRAND_HTML = '<img src="./favicon.png" width="22" height="22" alt="" class="header__logo"/>黑洞量化';
+
+function _headerRight(username) {
+  return `<div class="header__right"><div class="user-menu"><div class="user-menu__name" id="who">${username || ''}</div><div class="user-menu__drop"><div class="user-menu__drop-inner"><a href="javascript:void(0)" data-action="chg-pwd">修改密码</a><a href="javascript:void(0)" data-action="logout">退出登录</a></div></div></div></div>`;
+}
+function _bindHeaderRight(root) {
+  root.querySelector('.user-menu__drop')?.addEventListener('click', e => {
+    const a = e.target.closest('[data-action]');
+    if (!a) return;
+    if (a.dataset.action === 'chg-pwd') showChangePasswordModal();
+    if (a.dataset.action === 'logout') showConfirmModal('您是否确认退出登录？', doLogout);
+  });
+}
+
+function renderMainShell(root, activeRoute) {
+  const crumb = ALL_LABELS[activeRoute] || activeRoute;
   root.innerHTML = `<div class="layout">
-    <header class="header"><div class="header__left"><h1>Crypto Quant</h1><div class="header__sep"></div><span class="header__crumb">${crumb}</span></div>
-      <div class="header__right"><span class="user-name" id="who"></span><button id="lo">退出</button></div></header>
-    <div class="body"><aside class="sider">${Object.entries(LABELS).map(([k,v]) => navLink(k,v)).join("")}</aside>
+    <header class="header"><div class="header__left"><h1>${BRAND_HTML}</h1><button class="sider-toggle" id="sider-toggle" title="折叠/展开菜单">${TOGGLE_COLLAPSE}</button><div class="header__sep"></div><span class="header__crumb">${crumb}</span></div>
+      ${_headerRight('')}</header>
+    <div class="body"><aside class="sider">${buildSiderHTML(null)}</aside>
+      <div class="main"><div class="content"><div id="pane"><div class="loading"><div class="spinner"></div>加载中...</div></div></div></div></div></div>`;
+  _bindHeaderRight(root);
+  bindSiderToggle(root);
+}
+
+async function renderMain(root) {
+  const crumb = ALL_LABELS[route] || route;
+  const perms = me.permissions || [];
+  root.innerHTML = `<div class="layout">
+    <header class="header"><div class="header__left"><h1>${BRAND_HTML}</h1><button class="sider-toggle" id="sider-toggle" title="折叠/展开菜单">${TOGGLE_COLLAPSE}</button><div class="header__sep"></div><span class="header__crumb">${crumb}</span></div>
+      ${_headerRight(me.username)}</header>
+    <div class="body"><aside class="sider">${buildSiderHTML(perms)}</aside>
       <div class="main"><div class="content"><div id="pane"></div></div></div></div></div>`;
-  root.querySelector("#who").textContent = me.username;
-  root.querySelector("#lo").onclick = () => { setToken(null); me = null; location.hash = "#/login"; render(); };
+  _bindHeaderRight(root);
+  bindSiderToggle(root);
   const pane = root.querySelector("#pane");
   pane.innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
   try {
-    const views = { dashboard: viewDashboard, assets: viewAssets, trading: viewTrading, charts: viewCharts, strategies: viewStrategies, risk: viewRisk, system: viewSystem, users: viewUsers };
+    if (route === "users") { location.hash = "#/accounts"; route = "accounts"; }
+    const views = { dashboard: viewDashboard, assets: viewAssets, trading: viewTrading, charts: viewCharts, strategies: viewStrategies, risk: viewRisk, system: viewSystem, roles: viewRoles, accounts: viewAccounts };
     const fn = views[route];
     if (fn) await fn(pane); else pane.innerHTML = '<div class="card"><p class="muted">未知页面</p></div>';
   } catch (e) { pane.innerHTML = `<div class="card"><p class="error">${e.message}</p></div>`; }
@@ -666,71 +923,283 @@ async function viewSystem(pane) {
     </div>`;
 }
 
-/* ==================== 8. USERS ==================== */
-async function viewUsers(pane) {
-  if (me.role !== "admin") { pane.innerHTML = '<div class="card"><p class="muted">仅管理员可访问账号管理</p></div>'; return; }
-  pane.innerHTML = '<div class="loading"><div class="spinner"></div>加载用户数据...</div>';
-  const [users, logs] = await Promise.all([
-    apiFetch("/users"),
-    apiFetch("/users/audit-logs?limit=20").catch(() => []),
-  ]);
+/* ==================== 8. ROLES ==================== */
+const PERM_TREE = [
+  { key: "dashboard", label: "概览" },
+  { key: "assets", label: "资产收益" },
+  { key: "trading", label: "实盘交易" },
+  { key: "charts", label: "数据图表" },
+  { key: "strategies", label: "策略引擎" },
+  { key: "risk", label: "风控配置" },
+  { key: "system", label: "系统监控" },
+  { key: "users", label: "账号管理", children: [
+    { key: "roles", label: "角色管理" },
+    { key: "accounts", label: "创建账号" },
+  ]},
+];
+
+function _buildPermCheckboxes(selected) {
+  const s = new Set(selected || []);
+  let html = '<div class="perm-tree">';
+  for (const item of PERM_TREE) {
+    if (item.children) {
+      const parentChecked = item.children.some(c => s.has(c.key));
+      html += `<div class="perm-group">`;
+      html += `<label class="perm-item"><input type="checkbox" data-parent="${item.key}" ${parentChecked ? 'checked' : ''}/> ${item.label}</label>`;
+      html += `<div class="perm-children">`;
+      for (const ch of item.children) {
+        html += `<label class="perm-item perm-item--child"><input type="checkbox" data-perm="${ch.key}" data-of="${item.key}" ${s.has(ch.key) ? 'checked' : ''} ${!parentChecked ? 'disabled' : ''}/> ${ch.label}</label>`;
+      }
+      html += `</div></div>`;
+    } else {
+      html += `<label class="perm-item"><input type="checkbox" data-perm="${item.key}" ${s.has(item.key) ? 'checked' : ''}/> ${item.label}</label>`;
+    }
+  }
+  html += '</div>';
+  return html;
+}
+
+function _bindPermTree(container) {
+  container.querySelectorAll("[data-parent]").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const group = cb.dataset.parent;
+      container.querySelectorAll(`[data-of="${group}"]`).forEach(child => {
+        child.disabled = !cb.checked;
+        if (!cb.checked) child.checked = false;
+      });
+    });
+  });
+}
+
+function _collectPerms(container) {
+  const perms = [];
+  container.querySelectorAll("[data-perm]").forEach(cb => { if (cb.checked) perms.push(cb.dataset.perm); });
+  return perms;
+}
+
+function showRoleModal(existing, onDone) {
+  _closeAllModals();
+  const isEdit = !!existing;
+  const overlay = el(`<div class="modal-overlay">
+    <div class="modal-box" style="min-width:400px">
+      <h3>${isEdit ? '编辑角色' : '创建角色'}</h3>
+      <div class="modal-field"><label>角色名称</label><input type="text" id="rn" autocomplete="off" value="${isEdit ? existing.name : ''}" placeholder="请输入角色名称"/></div>
+      <div class="modal-field"><label>菜单权限</label>${_buildPermCheckboxes(isEdit ? existing.permissions : [])}</div>
+      <div class="modal-actions">
+        <span class="modal-cancel" id="mc">取消</span>
+        <button class="modal-confirm" type="button" id="rs">保存</button>
+      </div>
+    </div>
+  </div>`);
+  document.body.appendChild(overlay);
+  overlay.querySelector("#mc").onclick = () => overlay.remove();
+  overlay.addEventListener("mousedown", e => { if (e.target === overlay) overlay.remove(); });
+  _bindPermTree(overlay);
+  overlay.querySelector("#rs").onclick = async () => {
+    const name = (overlay.querySelector("#rn").value || "").trim();
+    if (!name) { showToast("请输入角色名称"); return; }
+    const perms = _collectPerms(overlay);
+    const btn = overlay.querySelector("#rs");
+    btn.disabled = true; btn.textContent = "保存中…";
+    try {
+      if (isEdit) {
+        await apiFetch(`/roles/${existing.id}`, { method: "PUT", body: JSON.stringify({ name, permissions: perms }) });
+      } else {
+        await apiFetch("/roles", { method: "POST", body: JSON.stringify({ name, permissions: perms }) });
+      }
+      overlay.remove();
+      showToast(isEdit ? "角色已更新" : "角色创建成功", "success");
+      onDone();
+    } catch (err) { showToast(err.message, "error"); } finally { btn.disabled = false; btn.textContent = "保存"; }
+  };
+}
+
+async function viewRoles(pane) {
+  if (me.role !== "admin") { pane.innerHTML = '<div class="card"><p class="muted">仅管理员可访问角色管理</p></div>'; return; }
+  pane.innerHTML = '<div class="loading"><div class="spinner"></div>加载角色数据...</div>';
+  const roles = await apiFetch("/roles");
+  let rolePage = 1;
+  let roleFiltered = roles;
+
+  function renderTable(list, pg) {
+    const rows = pageSlice(list, pg);
+    return `<table><thead><tr><th style="width:140px">角色名称</th><th>权限数</th><th>启用账号</th><th>创建人</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
+      ${rows.map(r => `<tr>
+        <td><strong>${r.name}</strong></td>
+        <td>${r.is_system ? '全部' : r.permissions.length}</td>
+        <td>${r.active_user_count || 0}</td>
+        <td>${r.created_by || '-'}</td>
+        <td>${fmtTime(r.created_at)}</td>
+        <td>${r.is_system ? '' : `<button class="sm btn-text" data-edit="${r.id}">编辑</button> <button class="sm btn-del" data-del="${r.id}">删除</button>`}</td>
+      </tr>`).join("")}
+    </tbody></table>${buildPagerHTML(list.length, pg)}`;
+  }
+
+  function refreshRoleTable() { pane.querySelector("#role-table").innerHTML = renderTable(roleFiltered, rolePage); }
 
   pane.innerHTML = `
-    <div class="card"><h2>创建用户</h2>
-      <form id="uf" class="row">
-        <div><label>用户名</label><input name="username" placeholder="输入用户名" style="width:160px"/></div>
-        <div><label>角色</label><select name="role"><option value="viewer">Viewer</option><option value="operator">Operator</option><option value="admin">Admin</option></select></div>
-        <button class="primary" type="submit">创建</button>
-      </form>
-      <div id="up" class="mt-12" style="display:none"></div>
-    </div>
-    <div class="card"><h2>用户列表 (${users.length})</h2>
-      <table><thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>状态</th><th>须改密</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
-        ${users.map(u => `<tr>
-          <td>${u.id}</td><td><strong>${u.username}</strong></td>
-          <td><span class="badge badge--${u.role === 'admin' ? 'blue' : u.role === 'operator' ? 'green' : 'muted'}">${u.role}</span></td>
-          <td>${u.is_active ? '<span class="badge badge--green">活跃</span>' : '<span class="badge badge--red">停用</span>'}</td>
-          <td>${u.must_change_password ? '<span class="badge badge--yellow">是</span>' : '-'}</td>
-          <td>${fmtTime(u.created_at)}</td>
-          <td>
-            ${u.is_active ? `<button class="sm danger" data-deact="${u.id}">停用</button>` : `<button class="sm primary" data-act="${u.id}">激活</button>`}
-            <button class="sm" data-reset="${u.id}">重置密码</button>
-          </td></tr>`).join("")}
-      </tbody></table>
-    </div>
-    <div class="card"><h2>操作日志</h2>
-      <table><thead><tr><th>操作</th><th>用户ID</th><th>详情</th><th>时间</th></tr></thead><tbody>
-        ${logs.length ? logs.map(l => `<tr><td><span class="badge badge--blue">${l.action}</span></td><td>${l.user_id || '-'}</td><td class="muted">${l.detail ? JSON.stringify(l.detail) : '-'}</td><td>${fmtTime(l.created_at)}</td></tr>`).join("") : '<tr><td colspan="4" class="empty-state">暂无日志</td></tr>'}
-      </tbody></table>
-    </div>`;
+    <div class="card"><div class="flex gap-8" style="align-items:center"><input id="role-search" class="input-search" placeholder="请输入角色名称搜索" style="width:160px"/><button class="btn-white" id="add-role" style="font-weight:600">创建角色</button></div></div>
+    <div class="card" id="role-table">${renderTable(roles, 1)}</div>`;
 
-  pane.querySelector("#uf").onsubmit = async e => {
-    e.preventDefault(); const fd = new FormData(e.target);
-    const un = (fd.get("username")||"").trim();
-    if (!un) { alert("请输入用户名"); return; }
+  pane.querySelector("#role-search").addEventListener("input", e => {
+    const kw = e.target.value.trim().toLowerCase();
+    roleFiltered = kw ? roles.filter(r => r.name.toLowerCase().includes(kw)) : roles;
+    rolePage = 1;
+    refreshRoleTable();
+  });
+
+  pane.querySelector("#add-role").onclick = () => showRoleModal(null, () => viewRoles(pane));
+  pane.addEventListener("click", async ev => {
+    const t = ev.target;
+    if (t.dataset.page) { rolePage = Number(t.dataset.page); refreshRoleTable(); return; }
+    if (t.dataset.edit) {
+      const r = roles.find(x => x.id === Number(t.dataset.edit));
+      if (r) showRoleModal(r, () => viewRoles(pane));
+    }
+    if (t.dataset.del) {
+      showConfirmModal("确认删除该角色？", async () => {
+        try { await apiFetch(`/roles/${t.dataset.del}`, { method: "DELETE" }); showToast("角色已删除", "success"); await viewRoles(pane); } catch (e) { showToast(e.message, "error"); }
+      });
+    }
+  });
+}
+
+/* ==================== 9. ACCOUNTS ==================== */
+function showCreateAccountModal(selectableRoles, onDone) {
+  _closeAllModals();
+  const first = selectableRoles.length ? selectableRoles[0] : null;
+  const roleItems = selectableRoles.map(r =>
+    `<div class="cdd-item" data-id="${r.id}">${r.name}</div>`
+  ).join("") || '<div class="cdd-item cdd-item--disabled">请先创建角色</div>';
+
+  const overlay = el(`<div class="modal-overlay">
+    <div class="modal-box" style="min-width:380px">
+      <h3>创建账号</h3>
+      <div class="modal-field"><label>账号名称</label><input type="text" id="ca-name" autocomplete="off" placeholder="请输入账号名称"/></div>
+      <div class="modal-field"><label>角色</label>
+        <div class="cdd" id="ca-role-dd">
+          <div class="cdd-trigger"><span class="cdd-text">${first ? first.name : '请选择角色'}</span><svg class="cdd-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg></div>
+          <div class="cdd-list">${roleItems}</div>
+        </div>
+        <input type="hidden" id="ca-role" value="${first ? first.id : ''}"/>
+      </div>
+      <div class="modal-actions">
+        <span class="modal-cancel" id="ca-cancel">取消</span>
+        <button class="modal-confirm" type="button" id="ca-save" ${first ? '' : 'disabled'}>确认</button>
+      </div>
+    </div>
+  </div>`);
+  document.body.appendChild(overlay);
+
+  const dd = overlay.querySelector("#ca-role-dd");
+  const ddText = dd.querySelector(".cdd-text");
+  const ddList = dd.querySelector(".cdd-list");
+  const ddHidden = overlay.querySelector("#ca-role");
+  dd.querySelector(".cdd-trigger").onclick = () => dd.classList.toggle("cdd--open");
+  dd.querySelectorAll(".cdd-item[data-id]").forEach(item => {
+    item.onclick = () => {
+      ddText.textContent = item.textContent;
+      ddHidden.value = item.dataset.id;
+      dd.querySelectorAll(".cdd-item").forEach(i => i.classList.remove("cdd-item--active"));
+      item.classList.add("cdd-item--active");
+      dd.classList.remove("cdd--open");
+    };
+  });
+  if (first) dd.querySelector(`.cdd-item[data-id="${first.id}"]`)?.classList.add("cdd-item--active");
+  document.addEventListener("mousedown", function _closeDd(e) {
+    if (!dd.contains(e.target)) { dd.classList.remove("cdd--open"); }
+    if (!document.body.contains(overlay)) document.removeEventListener("mousedown", _closeDd);
+  });
+
+  overlay.querySelector("#ca-cancel").onclick = () => overlay.remove();
+  overlay.addEventListener("mousedown", e => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector("#ca-save").onclick = async () => {
+    const un = (overlay.querySelector("#ca-name").value || "").trim();
+    const rid = ddHidden.value;
+    if (!un) { showToast("请输入账号名称"); return; }
+    if (!rid) { showToast("请选择角色"); return; }
+    const btn = overlay.querySelector("#ca-save");
+    btn.disabled = true; btn.textContent = "创建中…";
     try {
-      const res = await apiFetch("/users", { method: "POST", body: JSON.stringify({ username: un, role: fd.get("role") }) });
-      const up = pane.querySelector("#up");
-      up.style.display = "block";
-      up.innerHTML = `<div class="stat-card stat-card--green"><div class="stat-card__label">用户创建成功 · 初始密码（仅显示一次）</div><div class="stat-card__value" style="font-size:16px;font-family:monospace">${res.initial_password}</div></div>`;
-      setTimeout(() => viewUsers(pane), 2000);
-    } catch (err) { alert(err.message); }
+      await apiFetch("/users", { method: "POST", body: JSON.stringify({ username: un, role_id: Number(rid) }) });
+      showToast("账号创建成功", "success");
+      overlay.remove();
+      onDone();
+    } catch (err) { showToast(err.message, "error"); } finally { btn.disabled = false; btn.textContent = "确认"; }
   };
+}
+
+async function viewAccounts(pane) {
+  if (me.role !== "admin") { pane.innerHTML = '<div class="card"><p class="muted">仅管理员可访问账号管理</p></div>'; return; }
+  pane.innerHTML = '<div class="loading"><div class="spinner"></div>加载账号数据...</div>';
+  const [users, roles] = await Promise.all([
+    apiFetch("/users"),
+    apiFetch("/roles"),
+  ]);
+  const selectableRoles = roles.filter(r => !r.is_system);
+  let accPage = 1;
+  let accFiltered = users;
+
+  function renderUserTable(list, pg) {
+    const rows = pageSlice(list, pg);
+    return `<table><thead><tr><th style="width:140px">账号名称</th><th>角色</th><th>状态</th><th>创建人</th><th>创建时间</th><th>操作</th></tr></thead><tbody>
+      ${rows.map(u => `<tr>
+        <td><strong>${u.username}</strong></td>
+        <td><span class="badge badge--muted">${u.role_name || u.role}</span></td>
+        <td style="color:${u.is_active ? 'var(--green,#22c55e)' : 'var(--red,#ef4444)'}">${u.is_active ? '启用' : '禁用'}</td>
+        <td>${u.created_by || '-'}</td>
+        <td>${fmtTime(u.created_at)}</td>
+        <td>${u.role === 'admin' ? '' : `${u.is_active ? `<button class="sm btn-text" data-deact="${u.id}">禁用</button>` : `<button class="sm btn-text" data-act="${u.id}">启用</button>`} <button class="sm btn-text" data-reset="${u.id}">重置密码</button> <button class="sm btn-del" data-del="${u.id}">删除</button>`}</td>
+      </tr>`).join("")}
+    </tbody></table>${buildPagerHTML(list.length, pg)}`;
+  }
+
+  function refreshAccTable() { pane.querySelector("#acc-table").innerHTML = renderUserTable(accFiltered, accPage); }
+
+  pane.innerHTML = `
+    <div class="card"><div class="flex gap-8" style="align-items:center">
+      <input id="acc-search" class="input-search" placeholder="请输入账号名称搜索" style="width:160px"/>
+      <button class="btn-white" id="cu-open" style="font-weight:600">创建账号</button>
+    </div></div>
+    <div class="card" id="acc-table">${renderUserTable(users, 1)}</div>`;
+
+  pane.querySelector("#cu-open").onclick = () => showCreateAccountModal(selectableRoles, () => viewAccounts(pane));
+
+  pane.querySelector("#acc-search").addEventListener("input", e => {
+    const kw = e.target.value.trim().toLowerCase();
+    accFiltered = kw ? users.filter(u => u.username.toLowerCase().includes(kw)) : users;
+    accPage = 1;
+    refreshAccTable();
+  });
 
   pane.addEventListener("click", async ev => {
     const t = ev.target;
     try {
+      if (t.dataset.page) { accPage = Number(t.dataset.page); refreshAccTable(); return; }
       if (t.dataset.deact) {
-        if (confirm("确认停用此用户？")) { await apiFetch(`/users/${t.dataset.deact}/deactivate`, { method: "PATCH" }); await viewUsers(pane); }
+        showConfirmModal("确认禁用此账号？", async () => {
+          try { await apiFetch(`/users/${t.dataset.deact}/deactivate`, { method: "PATCH" }); showToast("已禁用", "success"); await viewAccounts(pane); } catch (e) { showToast(e.message, "error"); }
+        });
       }
-      if (t.dataset.act) { await apiFetch(`/users/${t.dataset.act}/activate`, { method: "PATCH" }); await viewUsers(pane); }
+      if (t.dataset.act) {
+        showConfirmModal("确认启用此账号？", async () => {
+          try { await apiFetch(`/users/${t.dataset.act}/activate`, { method: "PATCH" }); showToast("已启用", "success"); await viewAccounts(pane); } catch (e) { showToast(e.message, "error"); }
+        });
+      }
       if (t.dataset.reset) {
-        if (confirm("确认重置密码？")) {
-          const r = await apiFetch(`/users/${t.dataset.reset}/reset-password`, { method: "POST" });
-          alert("新密码: " + r.new_password);
-        }
+        showConfirmModal("确认重置此账号密码？", async () => {
+          try {
+            const r = await apiFetch(`/users/${t.dataset.reset}/reset-password`, { method: "POST" });
+            showToast("密码已重置：" + r.new_password, "success");
+          } catch (e) { showToast(e.message, "error"); }
+        });
       }
-    } catch (e) { alert(e.message); }
+      if (t.dataset.del) {
+        showConfirmModal("确认删除此账号？删除后不可恢复。", async () => {
+          try { await apiFetch(`/users/${t.dataset.del}`, { method: "DELETE" }); showToast("账号已删除", "success"); await viewAccounts(pane); } catch (e) { showToast(e.message, "error"); }
+        });
+      }
+    } catch (e) { showToast(e.message, "error"); }
   });
 }
 
@@ -739,11 +1208,17 @@ async function render() {
   parseHash();
   const root = document.getElementById("root");
   if (!token) { await renderLogin(root); return; }
-  await loadMe();
-  if (!me) { await renderLogin(root); return; }
-  if (me.must_change_password && route !== "change-password") { location.hash = "#/change-password"; route = "change-password"; }
-  if (route === "change-password") { await renderChangePassword(root); return; }
-  if (route === "login") { location.hash = "#/dashboard"; route = "dashboard"; }
+  if (!me) {
+    // Show layout shell immediately with spinner while loading user info
+    if (route === "login") { route = "dashboard"; }
+    renderMainShell(root, route);
+    await loadMe();
+    if (!me) { await renderLogin(root); return; }
+    const whoEl = root.querySelector("#who");
+    if (whoEl) whoEl.textContent = me.username;
+  } else {
+    if (route === "login") { location.hash = "#/dashboard"; route = "dashboard"; }
+  }
   await renderMain(root);
 }
 

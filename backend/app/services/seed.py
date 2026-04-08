@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -7,21 +8,40 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import hash_password
 from app.models.placeholders import AltDataJob, ChainFeedJob
 from app.models.risk_settings import RiskSettings
+from app.models.role import ALL_PERMISSION_KEYS, Role
 from app.models.user import User, UserRole
 
 
 async def run_seed(session: AsyncSession) -> None:
+    # Ensure super-admin role exists with full permissions
+    r_role = await session.execute(select(Role).where(Role.is_system.is_(True)))
+    sa_role = r_role.scalar_one_or_none()
+    if sa_role is None:
+        sa_role = Role(name="超级管理员", is_system=True, permissions=list(ALL_PERMISSION_KEYS), created_by="system")
+        session.add(sa_role)
+        await session.flush()
+    else:
+        if set(sa_role.permissions) != set(ALL_PERMISSION_KEYS):
+            sa_role.permissions = list(ALL_PERMISSION_KEYS)
+        if not sa_role.created_by:
+            sa_role.created_by = "system"
+
+    # Ensure admin user exists and is linked to super-admin role
     r = await session.execute(select(User).where(User.username == "admin"))
-    if r.scalar_one_or_none() is None:
+    admin_user = r.scalar_one_or_none()
+    if admin_user is None:
         session.add(
             User(
                 username="admin",
                 hashed_password=hash_password("123456"),
                 role=UserRole.admin.value,
+                role_id=sa_role.id,
                 is_active=True,
                 must_change_password=False,
             )
         )
+    elif admin_user.role_id != sa_role.id:
+        admin_user.role_id = sa_role.id
 
     r2 = await session.execute(select(RiskSettings).limit(1))
     if r2.scalar_one_or_none() is None:
