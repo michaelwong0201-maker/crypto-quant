@@ -14,8 +14,7 @@ async def fetch_and_store_klines(
 ) -> int:
     """Fetch klines from Binance and upsert into DB. Returns count of new records."""
     conn = BinanceTestnetConnector()
-    futures = market_type == "futures_usdt"
-    raw = await conn.public_klines(symbol, interval, limit=limit, futures=futures)
+    raw = await conn.public_klines(symbol, interval, limit=limit)
     
     count = 0
     for row in raw:

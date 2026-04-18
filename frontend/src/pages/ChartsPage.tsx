@@ -14,11 +14,13 @@ export default function ChartsPage() {
       <Card title="K 线数据（测试网公开接口）">
         <Form
           layout="inline"
-          initialValues={{ symbol: "BTCUSDT", interval: "1m", market: "spot", limit: 50 }}
+          initialValues={{ symbol: "BTCUSDT", interval: "1m", limit: 50 }}
           onFinish={async (v) => {
             try {
-              const { data } = await api.get("/market/klines", { params: v });
-              setRows(data.rows);
+              const { data } = await api.get("/market/klines", {
+                params: { ...v, market: "spot" },
+              });
+              setRows(data.data ?? []);
               setMeta({ symbol: data.symbol, interval: data.interval, market: data.market });
             } catch (e: any) {
               message.error(e?.response?.data?.detail ?? "加载失败");
@@ -32,15 +34,6 @@ export default function ChartsPage() {
             <Select
               style={{ width: 100 }}
               options={["1m", "5m", "15m", "1h"].map((x) => ({ value: x, label: x }))}
-            />
-          </Form.Item>
-          <Form.Item name="market" label="市场">
-            <Select
-              style={{ width: 140 }}
-              options={[
-                { value: "spot", label: "现货" },
-                { value: "futures_usdt", label: "U 本位合约" },
-              ]}
             />
           </Form.Item>
           <Form.Item name="limit" label="条数">
@@ -59,12 +52,12 @@ export default function ChartsPage() {
         )}
         <Table
           size="small"
-          rowKey={(r) => r.open_time}
+          rowKey={(r, i) => `${r.time}-${i}`}
           pagination={false}
           dataSource={rows}
           scroll={{ x: true }}
           columns={[
-            { title: "开盘时间", dataIndex: "open_time", width: 160 },
+            { title: "时间", dataIndex: "time", width: 160 },
             { title: "开", dataIndex: "open" },
             { title: "高", dataIndex: "high" },
             { title: "低", dataIndex: "low" },

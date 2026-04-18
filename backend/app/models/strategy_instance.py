@@ -20,5 +20,8 @@ class StrategyInstance(Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    run_status: Mapped[str] = mapped_column(String(32), default="CREATED")
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    grid_runtime: Mapped[Any] = mapped_column(JSONB, default=dict)
 
     owner = relationship("User", backref="strategies")

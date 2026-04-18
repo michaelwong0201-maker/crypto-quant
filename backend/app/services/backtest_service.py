@@ -14,8 +14,7 @@ async def run_backtest(
 ) -> dict:
     """Run a simple backtest using historical klines."""
     conn = BinanceTestnetConnector()
-    futures = market_type == "futures_usdt"
-    raw_klines = await conn.public_klines(symbol, interval, limit=limit, futures=futures)
+    raw_klines = await conn.public_klines(symbol, interval, limit=limit)
     
     closes = [float(k[4]) for k in raw_klines]
     times = [int(k[0]) for k in raw_klines]

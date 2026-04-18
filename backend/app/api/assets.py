@@ -43,10 +43,7 @@ async def balances(
         data = await get_portfolio_summary(user.id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Exchange error: {e}") from e
-    return {
-        "spot": data["spot_balances"],
-        "futures_usdt": data["futures_balances"],
-    }
+    return {"spot": data["spot_balances"]}
 
 
 @router.get("/equity-history")

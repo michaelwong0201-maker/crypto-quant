@@ -87,7 +87,7 @@ chmod +x scripts/git-tag-release.sh
 
 首次若尚未 `git init`，脚本会初始化并把默认分支设为 `main`。远程仓库按需添加：`git remote add origin <URL>` 后 `git push -u origin main` 与 `git push origin v0.0.x`。
 
-与 AI 协作节奏约定：**每轮开发结束 → 打开发标签 `v0.0.x-dev.N`（x 为下一正式版号）；你说某正式版验收通过 → 再改 `VERSION` 并打 `v0.0.x`。**
+与 AI 协作节奏约定：**每轮开发结束 → 打开发标签 `v0.0.x-dev.N`（x 为下一正式版号）；你说某正式版验收通过 → 改 `VERSION`、打 `v0.0.x`，并尽量将当前分支与该标签推送到 `origin`（GitHub 需本机已登录 / Token）。若推送失败，Agent 须明确说明原因与可复制命令；是否让 Agent 再试或改由本人推送，由负责人决定。**
 
 ## 版本状态
 

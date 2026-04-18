@@ -27,7 +27,6 @@ export default function StrategiesPage() {
             strategy_key: "simple_ma",
             name: "BTC 双均线",
             symbol: "BTCUSDT",
-            market_type: "spot",
             fast: 5,
             slow: 20,
             interval: "1m",
@@ -41,7 +40,7 @@ export default function StrategiesPage() {
                 strategy_key: v.strategy_key,
                 config: {
                   symbol: v.symbol,
-                  market_type: v.market_type,
+                  market_type: "spot",
                   fast: v.fast,
                   slow: v.slow,
                   interval: v.interval,
@@ -68,15 +67,6 @@ export default function StrategiesPage() {
           <Space wrap>
             <Form.Item name="symbol" label="交易对" rules={[{ required: true }]}>
               <Input style={{ width: 140 }} />
-            </Form.Item>
-            <Form.Item name="market_type" label="市场" rules={[{ required: true }]}>
-              <Select
-                style={{ width: 140 }}
-                options={[
-                  { value: "spot", label: "现货测试网" },
-                  { value: "futures_usdt", label: "合约测试网" },
-                ]}
-              />
             </Form.Item>
             <Form.Item name="interval" label="K 线周期" rules={[{ required: true }]}>
               <Input style={{ width: 100 }} />

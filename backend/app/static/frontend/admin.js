@@ -14,6 +14,12 @@ function el(html) {
 }
 function setToken(t) { token = t; t ? localStorage.setItem(LS, t) : localStorage.removeItem(LS); }
 function fmtNum(n, d = 2) { return Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }); }
+/** 避免 undefined/非数字在页面上显示成 NaN */
+function fmtNumSafe(n, d = 2) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "—";
+  return fmtNum(x, d);
+}
 function fmtTime(iso) {
   if (!iso) return "-";
   const d = new Date(iso);
@@ -28,10 +34,19 @@ function fmtTime(iso) {
 function fmtTs(ts) { return fmtTime(new Date(ts * 1000).toISOString()); }
 function sideBadge(s) { return s === "BUY" ? '<span class="badge badge--green">BUY</span>' : '<span class="badge badge--red">SELL</span>'; }
 function statusBadge(s) {
-  if (s === "submitted") return '<span class="badge badge--green">成功</span>';
+  if (s === "submitted") return '<span class="badge badge--green">已提交</span>';
+  if (s === "pending") return '<span class="badge badge--yellow">待报</span>';
+  if (s === "open") return '<span class="badge badge--blue">挂单</span>';
+  if (s === "partial") return '<span class="badge badge--yellow">部分成交</span>';
+  if (s === "filled") return '<span class="badge badge--green">已成交</span>';
+  if (s === "canceled") return '<span class="badge badge--muted">已撤销</span>';
+  if (s === "rejected") return '<span class="badge badge--red">被拒</span>';
   if (s === "failed") return '<span class="badge badge--red">失败</span>';
   if (s === "running" || s === "completed") return `<span class="badge badge--green">${s}</span>`;
   return `<span class="badge badge--muted">${s}</span>`;
+}
+function streamDot(ok) {
+  return ok ? '<span class="dot dot--green" title="正常"></span>' : '<span class="dot dot--red" title="异常"></span>';
 }
 function pctClass(v) { return v >= 0 ? "text-green" : "text-red"; }
 function pctStr(v) { return (v >= 0 ? "+" : "") + fmtNum(v) + "%"; }
@@ -509,31 +524,21 @@ async function viewAssets(pane) {
   try {
     [summary, stats] = await Promise.all([apiFetch("/assets/summary"), apiFetch("/assets/trade-stats")]);
   } catch (e) {
-    pane.innerHTML = `<div class="card"><p class="error">${e.message}</p><p class="muted mt-12">请检查 .env 中 BINANCE_API_KEY 和 BINANCE_API_SECRET 配置</p></div>`;
+    pane.innerHTML = `<div class="card"><p class="error">${e.message}</p><p class="muted mt-12">请检查项目根目录 .env 是否填写 BINANCE_API_KEY / BINANCE_API_SECRET，保存后<strong>重启后端</strong>。若用 Docker 部署，需保证容器能访问币安接口。</p></div>`;
     return;
   }
   const spot = summary.spot_balances || [];
-  const fut = summary.futures_balances || [];
   const alloc = summary.allocations || [];
 
   pane.innerHTML = `
     <div class="stats-grid">
-      <div class="stat-card"><div class="stat-card__label">总资产估值</div><div class="stat-card__value">$${fmtNum(summary.total_equity_estimate)}</div></div>
-      <div class="stat-card"><div class="stat-card__label">现货资产</div><div class="stat-card__value">$${fmtNum(summary.spot_total_estimate)}</div></div>
-      <div class="stat-card"><div class="stat-card__label">合约资产</div><div class="stat-card__value">$${fmtNum(summary.futures_total_estimate)}</div></div>
-      <div class="stat-card ${summary.futures_unrealized_pnl >= 0 ? 'stat-card--green' : 'stat-card--red'}"><div class="stat-card__label">未实现盈亏</div><div class="stat-card__value">$${fmtNum(summary.futures_unrealized_pnl)}</div></div>
+      <div class="stat-card"><div class="stat-card__label">总资产估值（现货）</div><div class="stat-card__value">$${fmtNumSafe(summary.total_equity_estimate)}</div></div>
+      <div class="stat-card"><div class="stat-card__label">现货资产</div><div class="stat-card__value">$${fmtNumSafe(summary.spot_total_estimate)}</div></div>
     </div>
-    <div class="grid-2">
-      <div class="card"><h2>现货持仓</h2>
+    <div class="card"><h2>现货持仓</h2>
         <table><thead><tr><th>资产</th><th>可用</th><th>冻结</th><th>合计</th></tr></thead><tbody>
           ${spot.length ? spot.map(b => { const t = (parseFloat(b.free||0) + parseFloat(b.locked||0)).toFixed(6); return `<tr><td><strong>${b.asset}</strong></td><td>${fmtNum(b.free, 6)}</td><td>${fmtNum(b.locked, 6)}</td><td>${t}</td></tr>`; }).join("") : '<tr><td colspan="4" class="empty-state">无持仓</td></tr>'}
         </tbody></table>
-      </div>
-      <div class="card"><h2>合约持仓</h2>
-        <table><thead><tr><th>资产</th><th>余额</th><th>可用</th><th>未实现盈亏</th></tr></thead><tbody>
-          ${fut.length ? fut.map(b => `<tr><td><strong>${b.asset}</strong></td><td>${fmtNum(b.balance, 6)}</td><td>${fmtNum(b.availableBalance, 6)}</td><td class="${parseFloat(b.crossUnPnl||0) >= 0 ? 'text-green' : 'text-red'}">${fmtNum(b.crossUnPnl, 6)}</td></tr>`).join("") : '<tr><td colspan="4" class="empty-state">无持仓</td></tr>'}
-        </tbody></table>
-      </div>
     </div>
     ${alloc.length ? `<div class="card"><h2>资产分布</h2><div class="stats-grid">${alloc.map(a => `<div class="stat-card"><div class="stat-card__label">${a.asset} (${a.type})</div><div class="stat-card__value">${fmtNum(a.amount, 4)}</div></div>`).join("")}</div></div>` : ""}
     <div class="card flex-between"><h2 style="margin:0">快照记录</h2><button class="sm primary" id="snap-btn">拍摄快照</button></div>`;
@@ -545,41 +550,71 @@ async function viewAssets(pane) {
 /* ==================== 3. TRADING ==================== */
 async function viewTrading(pane) {
   pane.innerHTML = '<div class="loading"><div class="spinner"></div>加载交易数据...</div>';
-  const [orders, positions] = await Promise.all([
+  const [orders, positions, venue, exRaw] = await Promise.all([
     apiFetch("/trading/orders?limit=50"),
-    apiFetch("/trading/positions").catch(() => ({ spot: [], futures: [] })),
+    apiFetch("/trading/positions").catch(() => ({ spot: [] })),
+    apiFetch("/trading/venue-status").catch(() => null),
+    apiFetch("/trading/exchange-open-orders").catch(() => []),
   ]);
 
+  const vn = venue || {};
+  const env = vn.spot_trading_env || (vn.binance_testnet ? "testnet" : "live");
+  const venueLine = env === "testnet"
+    ? "当前对接 <strong>Binance 现货测试网</strong>（testnet.binance.vision），请在测试网充值后验收。"
+    : env === "demo"
+    ? "当前对接 <strong>Binance 现货模拟交易（Demo）</strong>，密钥须来自 <a href=\"https://demo.binance.com\" target=\"_blank\" rel=\"noopener\">demo.binance.com</a> 的 API 管理。"
+    : "当前为 <strong>主网现货</strong> 配置，请确认密钥与风控后再操作。";
+
   pane.innerHTML = `
-    <div class="card"><h2>下单</h2>
+    <div class="card" style="border-left:4px solid var(--accent);background:rgba(99,102,241,0.06)">
+      <p style="margin:0 0 8px;font-size:14px">${venueLine}</p>
+      <div class="row" style="flex-wrap:wrap;gap:12px;align-items:center;font-size:13px">
+        <span>${streamDot(vn.market_stream_healthy)} 行情 WebSocket</span>
+        <span class="muted">${vn.market_stream_enabled === false ? "（已关闭）" : ""}</span>
+        <span>${streamDot(vn.user_stream_healthy)} 成交流 User Stream</span>
+        <span class="muted">${vn.user_stream_enabled === false ? "（已关闭）" : "网格补单依赖此项"}</span>
+      </div>
+    </div>
+    <div class="card"><h2>下单（现货）</h2>
       <form id="tf" class="row">
-        <div><label>交易对</label><input name="symbol" value="BTCUSDT" style="width:120px"/></div>
+        <div><label>交易对</label><input name="symbol" id="trade-symbol" value="BTCUSDT" style="width:120px"/></div>
         <div><label>方向</label><select name="side"><option value="BUY">买入 (BUY)</option><option value="SELL">卖出 (SELL)</option></select></div>
         <div><label>数量</label><input name="quantity" placeholder="0.001" style="width:120px"/></div>
-        <div><label>市场</label><select name="market_type"><option value="spot">现货</option><option value="futures_usdt">U本位合约</option></select></div>
         <button class="primary" type="submit" id="trade-btn">提交订单</button>
       </form>
       <div class="error" id="te" style="display:none"></div>
     </div>
-    <div class="grid-2">
-      <div class="card"><h2>现货持仓</h2>
+    <div class="card"><h2>现货持仓</h2>
         <table><thead><tr><th>资产</th><th>可用</th><th>冻结</th><th>合计</th></tr></thead><tbody>
-          ${positions.spot.length ? positions.spot.map(p => `<tr><td><strong>${p.asset}</strong></td><td>${p.free}</td><td>${p.locked}</td><td>${p.total}</td></tr>`).join("") : '<tr><td colspan="4" class="empty-state">无持仓</td></tr>'}
+          ${positions.spot && positions.spot.length ? positions.spot.map(p => `<tr><td><strong>${p.asset}</strong></td><td>${p.free}</td><td>${p.locked}</td><td>${p.total}</td></tr>`).join("") : '<tr><td colspan="4" class="empty-state">无持仓</td></tr>'}
         </tbody></table>
-      </div>
-      <div class="card"><h2>合约持仓</h2>
-        <table><thead><tr><th>资产</th><th>余额</th><th>可用</th><th>未实现盈亏</th></tr></thead><tbody>
-          ${positions.futures.length ? positions.futures.map(p => `<tr><td><strong>${p.asset}</strong></td><td>${p.balance}</td><td>${p.available}</td><td class="${parseFloat(p.unrealized_pnl) >= 0 ? 'text-green' : 'text-red'}">${p.unrealized_pnl}</td></tr>`).join("") : '<tr><td colspan="4" class="empty-state">无持仓</td></tr>'}
-        </tbody></table>
-      </div>
     </div>
-    <div class="card"><h2>订单历史</h2>
-      <table><thead><tr><th>ID</th><th>品种</th><th>方向</th><th>数量</th><th>市场</th><th>状态</th><th>交易所ID</th><th>时间</th></tr></thead><tbody>
-        ${orders.length ? orders.map(o => `<tr><td>${o.id}</td><td>${o.symbol}</td><td>${sideBadge(o.side)}</td><td>${o.quantity}</td><td>${o.market_type === 'spot' ? '现货' : '合约'}</td><td>${statusBadge(o.status)}</td><td class="muted">${o.exchange_order_id || '-'}</td><td>${fmtTime(o.created_at)}</td></tr>`).join("") : '<tr><td colspan="8" class="empty-state">暂无订单</td></tr>'}
+    <div class="card">
+      <div class="flex-between mb-16"><h2 style="margin:0">交易所当前挂单</h2><button type="button" class="sm primary" id="ex-refresh">刷新</button></div>
+      <table><thead><tr><th>品种</th><th>方向</th><th>类型</th><th>价格</th><th>数量</th><th>成交</th><th>状态</th><th>客户端订单号</th></tr></thead><tbody id="ex-oo-body">
+        ${Array.isArray(exRaw) && exRaw.length ? exRaw.map(o => `<tr><td>${o.symbol}</td><td>${sideBadge(o.side)}</td><td>${o.type || "-"}</td><td>${o.price}</td><td>${o.origQty}</td><td>${o.executedQty != null ? o.executedQty : "-"}</td><td>${o.status || "-"}</td><td class="muted" style="font-size:12px;max-width:220px;word-break:break-all">${o.clientOrderId || "-"}</td></tr>`).join("") : '<tr><td colspan="8" class="empty-state">暂无挂单或未配置 API</td></tr>'}
+      </tbody></table>
+    </div>
+    <div class="card"><h2>本地订单记录</h2>
+      <table><thead><tr><th>ID</th><th>品种</th><th>方向</th><th>类型</th><th>数量</th><th>价格</th><th>状态</th><th>交易所ID</th><th>客户端ID</th><th>时间</th></tr></thead><tbody>
+        ${orders.length ? orders.map(o => `<tr><td>${o.id}</td><td>${o.symbol}</td><td>${sideBadge(o.side)}</td><td>${o.order_type || "-"}</td><td>${o.quantity}</td><td>${o.price != null ? o.price : "—"}</td><td>${statusBadge(o.status)}</td><td class="muted">${o.exchange_order_id || '-'}</td><td class="muted" style="font-size:12px;max-width:140px;word-break:break-all">${o.client_order_id || '-'}</td><td>${fmtTime(o.created_at)}</td></tr>`).join("") : '<tr><td colspan="10" class="empty-state">暂无订单</td></tr>'}
       </tbody></table>
     </div>`;
 
   const te = pane.querySelector("#te");
+  async function reloadOpenOrders() {
+    const sym = (pane.querySelector("#trade-symbol")?.value || "").trim() || null;
+    const body = pane.querySelector("#ex-oo-body");
+    try {
+      const q = sym ? ("?symbol=" + encodeURIComponent(sym)) : "";
+      const list = await apiFetch("/trading/exchange-open-orders" + q);
+      body.innerHTML = list.length ? list.map(o => `<tr><td>${o.symbol}</td><td>${sideBadge(o.side)}</td><td>${o.type || "-"}</td><td>${o.price}</td><td>${o.origQty}</td><td>${o.executedQty != null ? o.executedQty : "-"}</td><td>${o.status || "-"}</td><td class="muted" style="font-size:12px;max-width:220px;word-break:break-all">${o.clientOrderId || "-"}</td></tr>`).join("") : '<tr><td colspan="8" class="empty-state">暂无挂单</td></tr>';
+    } catch {
+      body.innerHTML = '<tr><td colspan="8" class="empty-state">无法拉取挂单（权限或网络）</td></tr>';
+    }
+  }
+  pane.querySelector("#ex-refresh").onclick = () => reloadOpenOrders();
+
   pane.querySelector("#tf").onsubmit = async e => {
     e.preventDefault(); te.style.display = "none";
     const fd = new FormData(e.target), btn = pane.querySelector("#trade-btn");
@@ -587,7 +622,7 @@ async function viewTrading(pane) {
     if (!qty) { te.textContent = "请输入数量"; te.style.display = "block"; return; }
     btn.disabled = true; btn.textContent = "提交中…";
     try {
-      await apiFetch("/trading/orders", { method: "POST", body: JSON.stringify({ symbol: fd.get("symbol"), side: fd.get("side"), quantity: qty, market_type: fd.get("market_type") }) });
+      await apiFetch("/trading/orders", { method: "POST", body: JSON.stringify({ symbol: fd.get("symbol"), side: fd.get("side"), quantity: qty }) });
       await viewTrading(pane);
     } catch (err) { te.textContent = err.message; te.style.display = "block"; } finally { btn.disabled = false; btn.textContent = "提交订单"; }
   };
@@ -601,7 +636,6 @@ async function viewCharts(pane) {
         <form id="kf" class="flex gap-8" style="align-items:flex-end">
           <div><label>交易对</label><input name="symbol" value="BTCUSDT" style="width:110px"/></div>
           <div><label>周期</label><select name="interval">${["1m","5m","15m","30m","1h","4h","1d"].map(x => `<option ${x==='1h'?'selected':''}>${x}</option>`).join("")}</select></div>
-          <div><label>市场</label><select name="market"><option value="spot">现货</option><option value="futures_usdt">合约</option></select></div>
           <div><label>条数</label><input name="limit" value="200" style="width:70px"/></div>
           <button class="primary sm" type="submit">查询</button>
         </form>
@@ -613,7 +647,6 @@ async function viewCharts(pane) {
       <form id="sync-form" class="flex gap-8" style="align-items:flex-end">
         <div><label>交易对</label><input name="symbol" value="BTCUSDT" style="width:110px"/></div>
         <div><label>周期</label><select name="interval">${["1m","5m","15m","1h","4h","1d"].map(x => `<option ${x==='1h'?'selected':''}>${x}</option>`).join("")}</select></div>
-        <div><label>市场</label><select name="market"><option value="spot">现货</option><option value="futures_usdt">合约</option></select></div>
         <button class="primary sm" type="submit">同步到数据库</button>
       </form>
       <div id="sync-result" class="muted mt-12"></div>
@@ -658,13 +691,13 @@ async function viewCharts(pane) {
 
   pane.querySelector("#kf").onsubmit = async e => {
     e.preventDefault(); const fd = new FormData(e.target);
-    await loadChart({ symbol: fd.get("symbol"), interval: fd.get("interval"), market: fd.get("market"), limit: fd.get("limit") });
+    await loadChart({ symbol: fd.get("symbol"), interval: fd.get("interval"), market: "spot", limit: fd.get("limit") });
   };
 
   pane.querySelector("#sync-form").onsubmit = async e => {
     e.preventDefault(); const fd = new FormData(e.target);
     try {
-      const r = await apiFetch(`/market/klines/sync?symbol=${fd.get("symbol")}&interval=${fd.get("interval")}&market=${fd.get("market")}`, { method: "POST" });
+      const r = await apiFetch(`/market/klines/sync?symbol=${fd.get("symbol")}&interval=${fd.get("interval")}&market=spot`, { method: "POST" });
       pane.querySelector("#sync-result").textContent = `已同步 ${r.synced} 条新数据`;
     } catch (err) { pane.querySelector("#sync-result").textContent = err.message; }
   };
@@ -675,11 +708,23 @@ async function viewCharts(pane) {
 /* ==================== 5. STRATEGIES ==================== */
 async function viewStrategies(pane) {
   pane.innerHTML = '<div class="loading"><div class="spinner"></div>加载策略数据...</div>';
-  const [catalog, instances, btHistory] = await Promise.all([
-    apiFetch("/strategies/catalog"),
-    apiFetch("/strategies"),
-    apiFetch("/strategies/backtest/history?limit=10"),
-  ]);
+  const endpoints = [
+    ["GET /strategies/catalog", () => apiFetch("/strategies/catalog")],
+    ["GET /strategies", () => apiFetch("/strategies")],
+    ["GET /strategies/backtest/history", () => apiFetch("/strategies/backtest/history?limit=10")],
+  ];
+  const settled = await Promise.allSettled(endpoints.map(([, fn]) => fn()));
+  const failed = settled
+    .map((r, i) => (r.status === "rejected" ? `${endpoints[i][0]}: ${r.reason?.message || r.reason}` : null))
+    .filter(Boolean);
+  if (failed.length) {
+    pane.innerHTML = `<div class="card"><p class="error">${failed.join("<br/>")}</p>
+      <p class="muted mt-12">若提示 500：先确认数据库已 <code>alembic upgrade head</code>；若仍失败，请查看运行 <code>uvicorn</code> 的终端里对应请求栈，或把报错贴给开发。</p></div>`;
+    return;
+  }
+  const catalog = settled[0].value;
+  const instances = settled[1].value;
+  const btHistory = settled[2].value;
 
   let selectedKey = catalog[0]?.key || "simple_ma";
 
@@ -696,6 +741,12 @@ async function viewStrategies(pane) {
     if (key === "bollinger") return `
       <div><label>布林周期</label><input name="period" type="number" value="${cfg.period||20}" style="width:70px"/></div>
       <div><label>标准差倍数</label><input name="num_std" type="number" step="0.1" value="${cfg.num_std||2.0}" style="width:70px"/></div>`;
+    if (key === "grid_spot") return `
+      <div><label>下界价</label><input name="lowerPrice" type="number" step="0.01" value="${cfg.lowerPrice||80000}" style="width:100px"/></div>
+      <div><label>上界价</label><input name="upperPrice" type="number" step="0.01" value="${cfg.upperPrice||100000}" style="width:100px"/></div>
+      <div><label>网格数</label><input name="gridCount" type="number" value="${cfg.gridCount||10}" style="width:70px"/></div>
+      <div><label>每格USDT</label><input name="amountPerGrid" type="number" step="0.01" value="${cfg.amountPerGrid||15}" style="width:80px"/></div>
+      <div><label>每轮最多挂单</label><input name="max_orders_per_tick" type="number" value="${cfg.max_orders_per_tick??12}" style="width:70px" title="防止一次轮询打满 API"/></div>`;
     return "";
   }
 
@@ -706,10 +757,10 @@ async function viewStrategies(pane) {
           <div><label>策略类型</label><select name="strategy_key" id="sk">${catalog.map(c => `<option value="${c.key}">${c.name}</option>`).join("")}</select></div>
           <div><label>名称</label><input name="name" value="BTC 策略" style="width:140px"/></div>
           <div><label>交易对</label><input name="symbol" value="BTCUSDT" style="width:110px"/></div>
-          <div><label>市场</label><select name="market_type"><option value="spot">现货</option><option value="futures_usdt">合约</option></select></div>
           <div><label>周期</label><input name="interval" value="1m" style="width:60px"/></div>
           <div><label>数量</label><input name="quantity" value="0.001" style="width:80px"/></div>
           <div><label>轮询(秒)</label><input name="poll_seconds" type="number" value="60" style="width:70px"/></div>
+          <div class="muted" style="align-self:flex-end;font-size:12px" id="env-hint">环境见 .env <code>BINANCE_USE_TESTNET</code></div>
         </div>
         <div class="row" id="extra-fields">${getFormFields(selectedKey)}</div>
         <button class="primary" type="submit">创建策略</button>
@@ -721,7 +772,7 @@ async function viewStrategies(pane) {
           <td>${r.id}</td><td>${r.name}</td>
           <td><span class="badge badge--blue">${r.strategy_key}</span></td>
           <td>${r.config?.symbol || '-'}</td>
-          <td>${r.running ? '<span class="badge badge--green">运行中</span>' : '<span class="badge badge--muted">已停止</span>'}</td>
+          <td>${r.running ? '<span class="badge badge--green">运行中</span>' : `<span class="badge badge--muted">${r.run_status || "已停止"}</span>`}</td>
           <td>
             ${r.running ? `<button class="sm danger" data-x="${r.id}">停止</button>` : `<button class="sm primary" data-s="${r.id}">启动</button>`}
             <button class="sm" data-log="${r.id}">日志</button>
@@ -759,10 +810,19 @@ async function viewStrategies(pane) {
   pane.querySelector("#sf").onsubmit = async e => {
     e.preventDefault(); const fd = new FormData(e.target);
     const key = fd.get("strategy_key");
-    const config = { symbol: fd.get("symbol"), market_type: fd.get("market_type"), interval: fd.get("interval"), quantity: fd.get("quantity"), poll_seconds: Number(fd.get("poll_seconds")) };
+    const config = { symbol: fd.get("symbol"), market_type: "spot", interval: fd.get("interval"), quantity: fd.get("quantity"), poll_seconds: Number(fd.get("poll_seconds")) };
     if (key === "simple_ma") { config.fast = Number(fd.get("fast")); config.slow = Number(fd.get("slow")); }
     if (key === "rsi") { config.period = Number(fd.get("period")); config.overbought = Number(fd.get("overbought")); config.oversold = Number(fd.get("oversold")); }
     if (key === "bollinger") { config.period = Number(fd.get("period")); config.num_std = Number(fd.get("num_std")); }
+    if (key === "grid_spot") {
+      config.lowerPrice = String(fd.get("lowerPrice"));
+      config.upperPrice = String(fd.get("upperPrice"));
+      config.gridCount = Number(fd.get("gridCount"));
+      config.amountPerGrid = String(fd.get("amountPerGrid"));
+      config.market_type = "spot";
+      const mx = fd.get("max_orders_per_tick");
+      if (mx !== null && mx !== "") config.max_orders_per_tick = Number(mx);
+    }
     try { await apiFetch("/strategies", { method: "POST", body: JSON.stringify({ name: fd.get("name"), strategy_key: key, config }) }); await viewStrategies(pane); } catch (err) { alert(err.message); }
   };
 

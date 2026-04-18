@@ -36,7 +36,11 @@ alwaysApply: true
      `./scripts/git-tag-release.sh vX.Y.Z "VX.Y.Z 验收通过"`  
      或等价：`git tag -a vX.Y.Z -m "VX.Y.Z 验收通过"`（若无需脚本里的 `git add -A` / `commit` 行为，可仅用 `git tag -a`，但须保证标签落在正确提交上）。
   3. 若标签 **已存在**，不要覆盖；向负责人说明并确认是否要打在新提交上或改用新补丁版本。
-- **推送**：是否 `git push` / `git push origin vX.Y.Z` 由负责人决定；Agent 可在打标后提示待推送命令。
+  4. **推送到 GitHub（负责人既定流程）**：在已配置 **`origin`** 且具备 **`network` + `git_write`** 的前提下，验收打标并提交完成后，**应继续执行**：
+     - `git push origin <当前分支名>`（一般为 `main`，以 `git rev-parse --abbrev-ref HEAD` 为准）；
+     - `git push origin vX.Y.Z`（仅推送本次正式标签，避免误推本地其它未就绪引用）。
+     - **若任一步 `git push` 失败**：须向负责人给出**明确反馈**——说明**失败命令**、**终端/完整错误摘要**、本地已完成的步骤（如「`VERSION` 已提交」「标签 `vX.Y.Z` 已打在 commit …」）。附上可复制的一行或两行重试命令。**不得**声称已推送成功；**不得**在未获负责人明示前**自动重复**执行 `git push`。
+     - **失败后由负责人决定**：负责人选择 **「请你再试一次推送」** 或 **「我自己推送」**；仅在前者出现时再次尝试；若负责人未表态，默认**不**再次推送。
 
 ## 与 README 的关系
 

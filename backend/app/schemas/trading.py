@@ -8,7 +8,6 @@ class PlaceOrderRequest(BaseModel):
     symbol: str = Field(examples=["BTCUSDT"])
     side: Literal["BUY", "SELL"]
     quantity: str
-    market_type: Literal["spot", "futures_usdt"] = "spot"
 
 
 class OrderRecordOut(BaseModel):
@@ -19,6 +18,9 @@ class OrderRecordOut(BaseModel):
     market_type: str
     status: str
     exchange_order_id: Optional[str]
+    client_order_id: Optional[str] = None
+    order_type: str = "MARKET"
+    price: Optional[str] = None
     error_message: Optional[str]
     created_at: datetime
 

@@ -27,6 +27,9 @@ async def execute_order_intent(
         quantity=intent.quantity,
         market_type=intent.market_type.value,
         status="pending",
+        order_type=intent.order_type,
+        price=intent.limit_price,
+        client_order_id=intent.client_order_id,
     )
     db.add(rec)
     await db.flush()

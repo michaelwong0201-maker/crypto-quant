@@ -22,12 +22,11 @@ async def klines(
     limit: int = Query(default=200, le=1000),
     market: str = Query(default="spot"),
 ) -> dict[str, Any]:
-    if market not in ("spot", "futures_usdt"):
-        raise HTTPException(status_code=400, detail="market must be spot or futures_usdt")
+    if market != "spot":
+        raise HTTPException(status_code=400, detail="only spot market is supported")
     conn = BinanceTestnetConnector()
-    futures = market == "futures_usdt"
     try:
-        raw = await conn.public_klines(symbol, interval, limit=limit, futures=futures)
+        raw = await conn.public_klines(symbol, interval, limit=limit)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     rows = [

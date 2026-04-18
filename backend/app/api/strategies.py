@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,8 +18,10 @@ from app.models.user import User, UserRole
 from app.schemas.strategy import StrategyInstanceCreate, StrategyInstanceOut
 from app.services.backtest_service import run_backtest
 from app.services.trading_exec import execute_order_intent
+from app.services.grid_orders import cancel_grid_orders_for_instance
 from app.strategy.engine import engine
 from app.strategy.strategies.bollinger import bollinger_loop
+from app.strategy.strategies.grid_spot import grid_spot_loop
 from app.strategy.strategies.rsi import rsi_loop
 from app.strategy.strategies.simple_ma import simple_ma_loop
 from app.trading.exchange_base import MarketType, OrderIntent, OrderSide
@@ -56,15 +59,40 @@ STRATEGY_CATALOG = [
             "interval": "1m", "quantity": "0.001", "poll_seconds": 60,
         },
     },
+    {
+        "key": "grid_spot",
+        "name": "BTC 现货等差网格",
+        "description": "现货全层级限价网格 + User Stream 成交补单（验收环境：Binance 测试网）",
+        "default_config": {
+            "symbol": "BTCUSDT",
+            "market_type": "spot",
+            "lowerPrice": "80000",
+            "upperPrice": "100000",
+            "gridCount": 10,
+            "amountPerGrid": "15",
+            "poll_seconds": 15,
+            "max_orders_per_tick": 12,
+        },
+    },
 ]
 
 STRATEGY_LOOPS = {
     "simple_ma": simple_ma_loop,
     "rsi": rsi_loop,
     "bollinger": bollinger_loop,
+    "grid_spot": grid_spot_loop,
 }
 
 VALID_KEYS = {s["key"] for s in STRATEGY_CATALOG}
+
+
+def _safe_float(x: Any) -> float:
+    if x is None:
+        return 0.0
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _merge_config(key: str, cfg: dict[str, Any]) -> dict[str, Any]:
@@ -89,7 +117,12 @@ async def list_strategies(
         q = q.where(StrategyInstance.owner_id == user.id)
     rows = list((await db.execute(q)).scalars().all())
     return [
-        StrategyInstanceOut.model_validate(s, update={"running": engine.is_running(s.id)})
+        StrategyInstanceOut.model_validate(s).model_copy(
+            update={
+                "running": engine.is_running(s.id),
+                "run_status": getattr(s, "run_status", "CREATED"),
+            },
+        )
         for s in rows
     ]
 
@@ -110,7 +143,8 @@ async def create_strategy(
     db.add(s)
     await db.commit()
     await db.refresh(s)
-    return StrategyInstanceOut.model_validate(s, update={"running": False})
+    await db.refresh(s)
+    return StrategyInstanceOut.model_validate(s).model_copy(update={"running": False})
 
 
 @router.delete("/{instance_id}")
@@ -125,6 +159,9 @@ async def delete_strategy(
         raise HTTPException(status_code=404, detail="Not found")
     if engine.is_running(instance_id):
         engine.stop(instance_id)
+    if inst.strategy_key == "grid_spot":
+        await asyncio.sleep(0.25)
+        await cancel_grid_orders_for_instance(instance_id, str(inst.config.get("symbol", "BTCUSDT")))
     await db.delete(inst)
     await db.commit()
     return {"status": "deleted"}
@@ -149,7 +186,12 @@ async def start_strategy(
     if inst.strategy_key not in STRATEGY_LOOPS:
         raise HTTPException(status_code=400, detail="Unsupported strategy")
 
+    inst.run_status = "RUNNING"
+    inst.last_error = None
+    await db.commit()
+
     cfg = dict(inst.config)
+    cfg["_instance_id"] = instance_id
     loop_fn = STRATEGY_LOOPS[inst.strategy_key]
 
     async def coro_factory(stop_event: Any) -> None:
@@ -161,11 +203,7 @@ async def start_strategy(
                 row = r1.scalar_one()
                 r2 = await session.execute(select(UserModel).where(UserModel.id == row.owner_id))
                 owner = r2.scalar_one()
-                mt = (
-                    MarketType.SPOT
-                    if str(row.config.get("market_type", "spot")) == "spot"
-                    else MarketType.FUTURES_USDT
-                )
+                mt = MarketType.SPOT
                 order_side = side if isinstance(side, OrderSide) else (OrderSide.BUY if str(side) == "BUY" else OrderSide.SELL)
                 intent = OrderIntent(
                     str(row.config["symbol"]), order_side,
@@ -199,6 +237,11 @@ async def stop_strategy(
     if user.role == UserRole.viewer.value:
         raise HTTPException(status_code=403, detail="Viewers cannot stop strategies")
     engine.stop(instance_id)
+    if inst.strategy_key == "grid_spot":
+        await asyncio.sleep(0.35)
+        await cancel_grid_orders_for_instance(instance_id, str(inst.config.get("symbol", "BTCUSDT")))
+    inst.run_status = "STOPPED"
+    await db.commit()
     return {"status": "stopped"}
 
 
@@ -247,6 +290,8 @@ async def run_backtest_endpoint(
 ) -> dict[str, Any]:
     if body.strategy_key not in VALID_KEYS:
         raise HTTPException(status_code=400, detail=f"Unknown strategy: {body.strategy_key}")
+    if body.strategy_key == "grid_spot":
+        raise HTTPException(status_code=400, detail="Grid strategy has no backtest in V0.0.7")
 
     cfg = _merge_config(body.strategy_key, body.config)
     try:
@@ -298,12 +343,12 @@ async def backtest_history(
             "strategy_key": r.strategy_key,
             "symbol": r.symbol,
             "interval": r.interval,
-            "initial_capital": float(r.initial_capital) if r.initial_capital else 0,
-            "final_capital": float(r.final_capital) if r.final_capital else 0,
-            "total_return_pct": float(r.total_return_pct) if r.total_return_pct else 0,
-            "max_drawdown_pct": float(r.max_drawdown_pct) if r.max_drawdown_pct else 0,
-            "win_rate": float(r.win_rate) if r.win_rate else 0,
-            "total_trades": r.total_trades or 0,
+            "initial_capital": _safe_float(r.initial_capital),
+            "final_capital": _safe_float(r.final_capital),
+            "total_return_pct": _safe_float(r.total_return_pct),
+            "max_drawdown_pct": _safe_float(r.max_drawdown_pct),
+            "win_rate": _safe_float(r.win_rate),
+            "total_trades": int(r.total_trades or 0),
             "status": r.status,
             "created_at": r.created_at.isoformat() if r.created_at else "",
         }

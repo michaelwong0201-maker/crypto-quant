@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class StrategyInstanceCreate(BaseModel):
@@ -19,5 +19,20 @@ class StrategyInstanceOut(BaseModel):
     owner_id: int
     created_at: datetime
     running: bool = False
+    run_status: str = "CREATED"
 
     model_config = {"from_attributes": True}
+
+    @field_validator("config", mode="before")
+    @classmethod
+    def _config_must_be_dict(cls, v: Any) -> dict[str, Any]:
+        if isinstance(v, dict):
+            return v
+        return {}
+
+    @field_validator("run_status", mode="before")
+    @classmethod
+    def _run_status_default(cls, v: Any) -> str:
+        if isinstance(v, str) and v.strip():
+            return v
+        return "CREATED"

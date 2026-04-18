@@ -17,7 +17,7 @@ export default function TradingPage() {
   return (
     <div>
       <Typography.Title level={4} style={{ marginTop: 0 }}>
-        实盘交易（测试网）
+        实盘交易（现货测试网 / 主网）
       </Typography.Title>
       <Card title="手动市价单（经风控）" style={{ marginBottom: 16 }}>
         <Form
@@ -28,7 +28,6 @@ export default function TradingPage() {
                 symbol: v.symbol,
                 side: v.side,
                 quantity: v.quantity,
-                market_type: v.market_type,
               });
               message.success("已提交");
               void load();
@@ -52,15 +51,6 @@ export default function TradingPage() {
           <Form.Item name="quantity" label="数量" rules={[{ required: true }]}>
             <Input style={{ width: 140 }} placeholder="基础资产数量" />
           </Form.Item>
-          <Form.Item name="market_type" label="市场" initialValue="spot" rules={[{ required: true }]}>
-            <Select
-              style={{ width: 160 }}
-              options={[
-                { value: "spot", label: "现货测试网" },
-                { value: "futures_usdt", label: "合约测试网" },
-              ]}
-            />
-          </Form.Item>
           <Form.Item>
             <Button type="primary" htmlType="submit">
               下单
@@ -78,7 +68,6 @@ export default function TradingPage() {
             { title: "品种", dataIndex: "symbol" },
             { title: "方向", dataIndex: "side" },
             { title: "数量", dataIndex: "quantity" },
-            { title: "市场", dataIndex: "market_type" },
             { title: "状态", dataIndex: "status" },
             { title: "交易所订单号", dataIndex: "exchange_order_id" },
             { title: "时间", dataIndex: "created_at" },

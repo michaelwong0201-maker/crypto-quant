@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.risk_settings import RiskSettings
-from app.trading.exchange_base import MarketType, OrderIntent
+from app.trading.exchange_base import OrderIntent
 from app.trading.binance import BinanceTestnetConnector
 
 
@@ -23,17 +23,36 @@ async def ensure_risk_allows(db: AsyncSession, intent: OrderIntent, connector: B
 
     max_notional = Decimal(str(settings_row.max_order_notional_usd))
     sym = intent.symbol.replace("/", "").upper()
-    try:
-        if intent.market_type == MarketType.FUTURES_USDT:
-            px_data = await connector.futures_mark_price(sym)
-            price = Decimal(str(px_data.get("markPrice", "0")))
-        else:
+    if intent.order_type == "LIMIT" and intent.limit_price:
+        price = Decimal(str(intent.limit_price))
+    else:
+        try:
             px_data = await connector.spot_ticker_price(sym)
             price = Decimal(str(px_data.get("price", "0")))
-    except Exception:
-        price = Decimal("0")
+        except Exception:
+            price = Decimal("0")
 
     qty = Decimal(str(intent.quantity))
     notional = qty * price
     if price > 0 and notional > max_notional:
         raise RiskRejected(f"Order notional {notional} exceeds cap {max_notional} USD")
+
+    extra = intent.extra or {}
+    if extra.get("require_market_stream"):
+        from app.services.market_cache import market_stream_healthy
+
+        if not await market_stream_healthy():
+            raise RiskRejected("Market WebSocket stream not healthy (see Redis cq:market:ws_alive); grid orders blocked")
+
+    if extra.get("require_user_stream"):
+        from app.services.market_cache import user_stream_healthy
+
+        if not await user_stream_healthy():
+            raise RiskRejected("User stream not healthy (executionReport WS); grid orders blocked")
+
+    if extra.get("grid_instance_id") is not None:
+        from app.services.market_cache import allow_grid_order_burst
+
+        gid = int(extra["grid_instance_id"])
+        if not await allow_grid_order_burst(gid):
+            raise RiskRejected("Grid order rate limit exceeded (max 36 orders per 60s per strategy)")

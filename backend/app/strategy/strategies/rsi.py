@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Awaitable, Callable, Optional
 
-from app.trading.exchange_base import MarketType, OrderSide
+from app.trading.exchange_base import OrderSide
 from app.trading.binance import BinanceTestnetConnector
 
 logger = logging.getLogger(__name__)
@@ -32,15 +32,12 @@ async def rsi_loop(
     period = int(config.get("period", 14))
     overbought = float(config.get("overbought", 70))
     oversold = float(config.get("oversold", 30))
-    market_type = MarketType.SPOT if config.get("market_type", "spot") == "spot" else MarketType.FUTURES_USDT
-    futures = market_type == MarketType.FUTURES_USDT
-
     conn = BinanceTestnetConnector()
     last_state: Optional[str] = None
 
     while not stop_event.is_set():
         try:
-            klines = await conn.public_klines(symbol, interval, limit=max(period + 50, 120), futures=futures)
+            klines = await conn.public_klines(symbol, interval, limit=max(period + 50, 120))
             closes = [float(k[4]) for k in klines]
             if len(closes) < period + 2:
                 await asyncio.sleep(poll)

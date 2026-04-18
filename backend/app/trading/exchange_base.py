@@ -5,7 +5,6 @@ from typing import Any, Optional
 
 class MarketType(str, Enum):
     SPOT = "spot"
-    FUTURES_USDT = "futures_usdt"
 
 
 class OrderSide(str, Enum):
@@ -25,6 +24,8 @@ class OrderIntent:
         *,
         reduce_only: bool = False,
         client_order_id: Optional[str] = None,
+        order_type: str = "MARKET",
+        limit_price: Optional[str] = None,
         extra: Optional[dict[str, Any]] = None,
     ):
         self.symbol = symbol
@@ -33,6 +34,8 @@ class OrderIntent:
         self.market_type = market_type
         self.reduce_only = reduce_only
         self.client_order_id = client_order_id
+        self.order_type = order_type
+        self.limit_price = limit_price
         self.extra = extra or {}
 
 
