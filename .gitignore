@@ -1,0 +1,21 @@
+# Local secrets and runtime config
+user_data/config.json
+.env
+*.env
+
+# Freqtrade runtime state
+user_data/*.sqlite
+user_data/*.sqlite-*
+user_data/logs/
+user_data/backtest_results/
+user_data/data/
+
+# Python/cache/system files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+
+# FreqUI generated backups
+frequi_assets/installed.orig/
+frequi_assets/installed.broken-*/
